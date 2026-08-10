@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="ja"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>バド割 — ダブルス組み合わせメーカー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&amp;family=Inter:wght@400;500;600;700&amp;family=Zen+Kaku+Gothic+New:wght@500;700;900&amp;display=swap" rel="stylesheet">
+<style>
+  :root{
+    --court-green: #1F6F54;
+    --court-green-dark: #16523E;
+    --court-green-light: #2E8B67;
+    --bg: #F2F4EE;
+    --panel: #FFFFFF;
+    --ink: #14231F;
+    --ink-soft: #4B5A55;
+    --line: #DCE3DA;
+    --gold: #E8B93F;
+    --gold-dark: #C79A26;
+    --coral: #D9634A;
+    --coral-dark: #B84C36;
+    --court-line: rgba(255,255,255,0.92);
+    --radius: 14px;
+    --shadow: 0 2px 10px rgba(20,35,31,0.08), 0 1px 2px rgba(20,35,31,0.06);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:'Zen Kaku Gothic New','Inter',sans-serif; -webkit-tap-highlight-color:transparent;}
+  body{padding-bottom:40px;}
+  .display{font-family:'Oswald','Zen Kaku Gothic New',sans-serif; letter-spacing:0.02em;}
+
+  header.app{
+    background: linear-gradient(135deg, var(--court-green-dark), var(--court-green));
+    color:#fff; padding:22px 18px 60px;
+    position:relative; overflow:hidden;
+  }
+  header.app::after{
+    content:""; position:absolute; right:-30px; top:-30px; width:160px; height:160px;
+    border:3px solid rgba(255,255,255,0.15); border-radius:50%;
+  }
+  header.app::before{
+    content:""; position:absolute; left:-40px; bottom:-60px; width:180px; height:180px;
+    border:3px solid rgba(255,255,255,0.1); border-radius:50%;
+  }
+  .brand{display:flex; align-items:center; gap:10px; position:relative; z-index:1;}
+  .brand .mark{
+    width:34px; height:34px; border-radius:50%; background:var(--gold);
+    display:flex; align-items:center; justify-content:center; font-family:'Oswald';
+    font-weight:700; color:var(--court-green-dark); font-size:15px; flex-shrink:0;
+  }
+  .brand h1{font-family:'Oswald'; font-weight:700; font-size:20px; margin:0; letter-spacing:0.03em;}
+  .brand p{margin:2px 0 0; font-size:12px; opacity:0.85;}
+
+  nav.tabs{
+    position:relative; z-index:2; display:flex; gap:6px; margin:16px auto -46px;
+    max-width:640px; padding:0 14px;
+  }
+  nav.tabs button{
+    flex:1; border:none; padding:12px 6px; font-size:13px; font-weight:700;
+    font-family:'Zen Kaku Gothic New'; border-radius:12px 12px 0 0; cursor:pointer;
+    background:rgba(255,255,255,0.14); color:#fff; transition:all .15s;
+  }
+  nav.tabs button.active{background:var(--panel); color:var(--court-green-dark); box-shadow:0 -2px 8px rgba(0,0,0,0.08);}
+  nav.tabs button .badge{
+    display:inline-block; margin-left:5px; background:var(--gold); color:var(--court-green-dark);
+    font-size:10px; font-weight:700; padding:1px 6px; border-radius:10px;
+  }
+
+  main{max-width:640px; margin:0 auto; padding:60px 14px 20px;}
+  .panel{
+    background:var(--panel); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow);
+    margin-bottom:14px;
+  }
+  .panel h2{font-family:'Oswald'; font-size:15px; margin:0 0 4px; color:var(--court-green-dark);
+    text-transform:uppercase; letter-spacing:0.06em;}
+  .panel .sub{font-size:12.5px; color:var(--ink-soft); margin:0 0 14px; line-height:1.5;}
+
+  .row{display:flex; gap:8px;}
+  input[type=text], input[type=number], select{
+    font-family:inherit; font-size:14.5px; padding:11px 12px; border-radius:10px;
+    border:1.5px solid var(--line); width:100%; background:#fbfcfa; color:var(--ink);
+  }
+  input:focus, select:focus{outline:none; border-color:var(--court-green-light);}
+  button.btn{
+    font-family:'Zen Kaku Gothic New'; font-weight:700; font-size:14px; padding:11px 16px;
+    border-radius:10px; border:none; cursor:pointer; white-space:nowrap; transition:transform .08s, opacity .15s;
+  }
+  button.btn:active{transform:scale(0.97);}
+  button.btn.primary{background:var(--court-green); color:#fff;}
+  button.btn.primary:hover{background:var(--court-green-dark);}
+  button.btn.gold{background:var(--gold); color:var(--court-green-dark);}
+  button.btn.gold:hover{background:var(--gold-dark);}
+  button.btn.ghost{background:#fff; color:var(--ink); border:1.5px solid var(--line);}
+  button.btn.ghost:hover{border-color:var(--ink-soft);}
+  button.btn.danger{background:#fff; color:var(--coral-dark); border:1.5px solid #F1CFC5;}
+  button.btn.danger:hover{background:#FDF2EF;}
+  button.btn.block{width:100%;}
+  button.btn:disabled{opacity:0.4; cursor:not-allowed;}
+  button.btn.sm{padding:6px 10px; font-size:12px; border-radius:8px;}
+
+  .memberList{display:flex; flex-direction:column; gap:8px;}
+  .memberRow{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:10px 12px; border:1.5px solid var(--line); border-radius:10px; background:#fbfcfa;
+  }
+  .memberRow .name{font-weight:600; font-size:14.5px;}
+  .memberRow .meta{font-size:11.5px; color:var(--ink-soft);}
+
+  .checkGrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px;}
+  label.checkItem{
+    display:flex; align-items:center; gap:8px; padding:10px 12px; border:1.5px solid var(--line);
+    border-radius:10px; cursor:pointer; background:#fbfcfa; font-size:14px; font-weight:600;
+    user-select:none;
+  }
+  label.checkItem.checked{background:#EAF5EF; border-color:var(--court-green-light); color:var(--court-green-dark);}
+  label.checkItem input{width:16px; height:16px; accent-color:var(--court-green);}
+
+  .statusPill{
+    display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700;
+    padding:3px 9px; border-radius:20px;
+  }
+  .statusPill.active{background:#EAF5EF; color:var(--court-green-dark);}
+  .statusPill.left{background:#FBEAE6; color:var(--coral-dark);}
+
+  .roundCard{
+    border:1.5px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:12px; background:#fbfcfa;
+  }
+  .roundCard .roundHead{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;}
+  .roundCard .roundHead .num{font-family:'Oswald'; font-size:13px; font-weight:700; color:var(--court-green-dark); letter-spacing:0.05em;}
+  .courtsWrap{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px;}
+  .courtLabel{font-size:11px; font-weight:700; color:var(--ink-soft); margin-bottom:4px; letter-spacing:0.04em;}
+  .sittingWrap{margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); font-size:12.5px; color:var(--ink-soft);}
+  .sittingWrap b{color:var(--ink);}
+
+  table.stats{width:100%; border-collapse:collapse; font-size:13px;}
+  table.stats th, table.stats td{text-align:left; padding:8px 6px; border-bottom:1px solid var(--line);}
+  table.stats th{font-size:11px; text-transform:uppercase; color:var(--ink-soft); letter-spacing:0.04em;}
+  table.stats td.num{font-family:'Oswald'; font-weight:600;}
+
+  .empty{text-align:center; padding:30px 10px; color:var(--ink-soft); font-size:13.5px;}
+  .empty .icon{font-size:30px; margin-bottom:8px;}
+
+  .shareBox{display:flex; gap:8px; align-items:center;}
+  .shareBox input{font-size:12.5px; color:var(--ink-soft);}
+
+  .toast{
+    position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+    background:var(--ink); color:#fff; padding:10px 18px; border-radius:30px; font-size:13px;
+    font-weight:600; box-shadow:var(--shadow); z-index:50; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(-4px);}
+
+  .inlineForm{display:flex; gap:8px; margin-top:12px;}
+  .footNote{font-size:11.5px; color:var(--ink-soft); text-align:center; margin-top:6px; line-height:1.6;}
+</style>
+</head>
+<body>
+
+<header class="app">
+  <div class="brand">
+    <div class="mark">🏸</div>
+    <div>
+      <h1>バド割</h1>
+      <p>サークルのダブルス組み合わせを、公平に自動で。</p>
+    </div>
+  </div>
+  <nav class="tabs" style="display: none;">
+    <button data-tab="members" class="active">メンバー管理</button>
+    <button data-tab="today">本日の参加者<span class="badge" id="todayBadge" style="display:none"></span></button>
+    <button data-tab="match">試合表</button>
+  </nav>
+</header>
+
+<main id="main">
+    <div class="panel">
+      <h2>はじめに：共有データを作成</h2>
+      <p class="sub">このアプリはClaudeのアカウントがなくても、ファイルを直接送るだけでサークルの誰でも使えるように作られています。まず一度だけ、下のボタンで「みんなで共有するデータ」を作成してください。</p>
+      <button class="btn primary block" id="createSharedBtn" style="font-size:15px; padding:14px;" disabled="">作成中…</button>
+    </div>
+    <div class="panel">
+      <h2>この後の流れ</h2>
+      <div class="memberList">
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">① 共有データを作成</div><div class="meta">ボタンを押すと、共有用の新しいファイルが自動でダウンロードされます。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">② ダウンロードしたファイルを送る</div><div class="meta">そのファイルをLINEやメールでサークルのメンバー全員に送ってください。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">③ 全員が同じファイルを開く</div><div class="meta">送られたファイルを開けば、メンバー登録や試合表がリアルタイムで共有されます（今このページで見ている画面は「元データ」なので、以後は使わず、配布したファイルの方をお使いください）。</div></div></div>
+      </div>
+    </div>
+  </main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- storage helpers ----------
+   This app is designed to run as a plain, standalone HTML file - opened
+   locally, emailed, or sent over LINE - with NO Claude account and NO
+   web hosting required. Shared data (members / today's matches) is kept
+   in a free, keyless JSON storage service (jsonblob.com) so every person
+   who opens their own copy of this exact file sees the same live data.
+   SYNC_ID is baked into the file itself once the organizer completes the
+   one-time setup step below, so redistributing that single file is all
+   that's needed - nothing to host, nothing to log into. */
+let SYNC_ID = "019fea03-fa61-711f-bd7d-4188ea133c62"; // <-- set automatically by the one-time setup step
+const SYNC_BASE = 'https://jsonblob.com/api/jsonBlob';
+
+function defaultState(){
+  return { members: [], courtCount: 2, session: null };
+}
+
+async function loadState(){
+  if(!SYNC_ID) return defaultState();
+  try{
+    const res = await fetch(`${SYNC_BASE}/${SYNC_ID}`, { headers:{'Accept':'application/json'} });
+    if(!res.ok) throw new Error('load failed: '+res.status);
+    return await res.json();
+  }catch(e){
+    throw e;
+  }
+}
+
+async function saveState(state){
+  if(!SYNC_ID) return;
+  try{
+    const res = await fetch(`${SYNC_BASE}/${SYNC_ID}`, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(state)
+    });
+    if(!res.ok) throw new Error('save failed: '+res.status);
+  }catch(e){
+    showToast('保存に失敗しました。通信状態を確認してください。');
+  }
+}
+
+async function createSharedStore(initial){
+  const res = await fetch(SYNC_BASE, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(initial)
+  });
+  if(!res.ok) throw new Error('create failed: '+res.status);
+  const loc = res.headers.get('Location') || res.headers.get('location') || '';
+  const id = loc.split('/').filter(Boolean).pop();
+  if(!id) throw new Error('no blob id returned');
+  return id;
+}
+
+/* ---------- app state ---------- */
+let state = defaultState();
+let activeTab = 'members';
+let lastSavedJSON = '';
+let syncing = false;
+let pollTimer = null;
+
+/* ---------- setup screen (first run, before a shared store exists) ---------- */
+function renderSetupScreen(){
+  return `
+    <div class="panel">
+      <h2>はじめに：共有データを作成</h2>
+      <p class="sub">このアプリはClaudeのアカウントがなくても、ファイルを直接送るだけでサークルの誰でも使えるように作られています。まず一度だけ、下のボタンで「みんなで共有するデータ」を作成してください。</p>
+      <button class="btn primary block" id="createSharedBtn" style="font-size:15px; padding:14px;">共有データを作成する</button>
+    </div>
+    <div class="panel">
+      <h2>この後の流れ</h2>
+      <div class="memberList">
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">① 共有データを作成</div><div class="meta">ボタンを押すと、共有用の新しいファイルが自動でダウンロードされます。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">② ダウンロードしたファイルを送る</div><div class="meta">そのファイルをLINEやメールでサークルのメンバー全員に送ってください。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">③ 全員が同じファイルを開く</div><div class="meta">送られたファイルを開けば、メンバー登録や試合表がリアルタイムで共有されます（今このページで見ている画面は「元データ」なので、以後は使わず、配布したファイルの方をお使いください）。</div></div></div>
+      </div>
+    </div>
+  `;
+}
+
+function bindSetupEvents(){
+  const btn = document.getElementById('createSharedBtn');
+  if(!btn) return;
+  btn.onclick = async ()=>{
+    btn.disabled = true;
+    btn.textContent = '作成中…';
+    try{
+      const initial = defaultState();
+      const id = await createSharedStore(initial);
+      SYNC_ID = id;
+      state = initial;
+      lastSavedJSON = JSON.stringify(state);
+      triggerDownload(buildSharedFile(id), 'badminton-scheduler-shared.html');
+      showToast('共有データを作成しました。ダウンロードしたファイルをメンバーに送ってください。');
+      activeTab = 'members';
+      startPolling();
+      render();
+    }catch(e){
+      showToast('作成に失敗しました。通信環境を確認してもう一度お試しください。');
+      btn.disabled = false;
+      btn.textContent = '共有データを作成する';
+    }
+  };
+}
+
+function buildSharedFile(id){
+  const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+  return html.replace(/let SYNC_ID = [^;]*;/, `let SYNC_ID = ${JSON.stringify(id)};`);
+}
+
+function triggerDownload(text, filename){
+  const blob = new Blob([text], {type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+function startPolling(){
+  if(pollTimer) return;
+  pollTimer = setInterval(pollUpdates, 6000);
+}
+
+function uid(){ return Math.random().toString(36).slice(2,9); }
+function pairKey(a,b){ return [a,b].sort().join('|'); }
+
+/* ---------- toast ---------- */
+let toastTimer=null;
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+/* ---------- persistence wrapper ---------- */
+async function persist(msg){
+  await saveState(state);
+  lastSavedJSON = JSON.stringify(state);
+  if(msg) showToast(msg);
+  render();
+}
+
+/* ---------- round generation logic ---------- */
+function activeParticipants(){
+  if(!state.session) return [];
+  return Object.values(state.session.participants).filter(p=>p.status==='active');
+}
+
+function generateRound(){
+  const s = state.session;
+  const active = activeParticipants();
+  const maxCourts = Math.floor(active.length/4);
+  const courts = Math.min(state.courtCount, maxCourts);
+  if(courts<1) return {error:'4人以上の参加者が必要です。'};
+
+  const numPlaying = courts*4;
+  const sorted = [...active].sort((a,b)=>{
+    if(a.gamesPlayed!==b.gamesPlayed) return a.gamesPlayed-b.gamesPlayed;
+    if(a.restStreak!==b.restStreak) return b.restStreak-a.restStreak;
+    return Math.random()-0.5;
+  });
+  const playing = sorted.slice(0,numPlaying);
+  const sitting = sorted.slice(numPlaying);
+
+  let best=null, bestScore=Infinity;
+  for(let attempt=0; attempt<80; attempt++){
+    const shuffled=[...playing].sort(()=>Math.random()-0.5);
+    const groups=[];
+    for(let c=0;c<courts;c++) groups.push(shuffled.slice(c*4,c*4+4));
+    let totalScore=0;
+    const matches = groups.map(g=>{
+      const splits=[
+        [[g[0],g[1]],[g[2],g[3]]],
+        [[g[0],g[2]],[g[1],g[3]]],
+        [[g[0],g[3]],[g[1],g[2]]],
+      ];
+      let bestSplit=null, bestSplitScore=Infinity;
+      for(const [p1,p2] of splits){
+        const k1=pairKey(p1[0].id,p1[1].id), k2=pairKey(p2[0].id,p2[1].id);
+        const score=(s.partnerCounts[k1]||0)*3 + (s.partnerCounts[k2]||0)*3;
+        if(score<bestSplitScore){bestSplitScore=score; bestSplit=[p1,p2];}
+      }
+      totalScore+=bestSplitScore;
+      return bestSplit;
+    });
+    if(totalScore<bestScore){bestScore=totalScore; best=matches;}
+  }
+
+  return { courts, playing, sitting, matches:best };
+}
+
+function commitRound(result){
+  const s = state.session;
+  const round = { index: s.rounds.length+1, matches: result.matches.map(m=>[
+      [m[0][0].id,m[0][1].id], [m[1][0].id,m[1][1].id]
+    ]), sitting: result.sitting.map(p=>p.id) };
+  s.rounds.push(round);
+
+  result.matches.forEach(m=>{
+    const [pair1,pair2] = m;
+    const k1=pairKey(pair1[0].id,pair1[1].id), k2=pairKey(pair2[0].id,pair2[1].id);
+    s.partnerCounts[k1] = (s.partnerCounts[k1]||0)+1;
+    s.partnerCounts[k2] = (s.partnerCounts[k2]||0)+1;
+    [...pair1,...pair2].forEach(p=>{
+      s.participants[p.id].gamesPlayed += 1;
+      s.participants[p.id].restStreak = 0;
+    });
+  });
+  result.sitting.forEach(p=>{
+    s.participants[p.id].restStreak += 1;
+  });
+}
+
+/* ---------- rendering ---------- */
+function render(){
+  const nav = document.querySelector('nav.tabs');
+  const main = document.getElementById('main');
+
+  if(!SYNC_ID){
+    nav.style.display='none';
+    main.innerHTML = renderSetupScreen();
+    bindSetupEvents();
+    return;
+  }
+  nav.style.display='flex';
+
+  document.querySelectorAll('nav.tabs button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.tab===activeTab);
+  });
+  const badge = document.getElementById('todayBadge');
+  if(state.session){
+    badge.style.display='inline-block';
+    badge.textContent = activeParticipants().length;
+  } else {
+    badge.style.display='none';
+  }
+
+  if(activeTab==='members') main.innerHTML = renderMembersTab();
+  else if(activeTab==='today') main.innerHTML = renderTodayTab();
+  else main.innerHTML = renderMatchTab();
+
+  bindEvents();
+}
+
+function renderMembersTab(){
+  const list = state.members.slice().sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+  return `
+    <div class="panel">
+      <h2>メンバーを登録</h2>
+      <p class="sub">サークルの固定メンバーを登録しておくと、毎回の参加者選択が楽になります。</p>
+      <div class="inlineForm">
+        <input type="text" id="newMemberName" placeholder="名前（例：山田 太郎）">
+        <button class="btn primary" id="addMemberBtn">追加</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>登録メンバー一覧（${list.length}人）</h2>
+      ${list.length===0 ? `<div class="empty"><div class="icon">🏸</div>まだメンバーが登録されていません。<br>上のフォームから追加しましょう。</div>` :
+      `<div class="memberList">
+        ${list.map(m=>`
+          <div class="memberRow">
+            <span class="name">${escapeHtml(m.name)}</span>
+            <button class="btn danger sm" data-action="deleteMember" data-id="${m.id}">削除</button>
+          </div>`).join('')}
+      </div>`}
+    </div>
+    <div class="panel">
+      <h2>このアプリを共有</h2>
+      <p class="sub">今開いているこのファイルが、そのままサークル共有用のファイルです。まだ送っていないメンバーがいたら、このファイル自体をLINEやメールで送ってください。開けば同じメンバー一覧・試合表がそのまま見られます。</p>
+      <button class="btn ghost block" id="redownloadBtn">このファイルを再ダウンロード（バックアップ・再配布用）</button>
+    </div>
+  `;
+}
+
+function renderTodayTab(){
+  if(!state.session){
+    if(state.members.length===0){
+      return `<div class="panel"><div class="empty"><div class="icon">👥</div>先に「メンバー管理」タブでメンバーを登録してください。</div></div>`;
+    }
+    const sorted = state.members.slice().sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+    return `
+      <div class="panel">
+        <h2>本日の参加者を選択</h2>
+        <p class="sub">今日参加するメンバーにチェックを入れてください。途中参加・途中退出は、開始後にいつでも調整できます。</p>
+        <div class="checkGrid" id="todayCheckGrid">
+          ${sorted.map(m=>`
+            <label class="checkItem" data-id="${m.id}">
+              <input type="checkbox" value="${m.id}">
+              ${escapeHtml(m.name)}
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="panel">
+        <h2>コート数</h2>
+        <p class="sub">同時に使える面数を入力してください。参加人数に対してコートが多い場合は、人数分に自動調整されます。</p>
+        <div class="row" style="max-width:140px;">
+          <input type="number" id="courtCountInput" min="1" max="10" value="${state.courtCount}">
+        </div>
+      </div>
+      <button class="btn primary block" id="startSessionBtn" style="font-size:15px; padding:14px;">本日の練習を開始する</button>
+    `;
+  }
+
+  const parts = Object.values(state.session.participants).sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+  const activeIds = new Set(parts.filter(p=>p.status==='active').map(p=>p.id));
+  const notYetIn = state.members.filter(m=>!state.session.participants[m.id]);
+
+  return `
+    <div class="panel">
+      <h2>本日の参加状況</h2>
+      <p class="sub">出入りがあったら、ステータスを切り替えてください。次に作成する試合表から反映されます。</p>
+      <div class="memberList">
+        ${parts.map(p=>`
+          <div class="memberRow">
+            <div>
+              <div class="name">${escapeHtml(p.name)}</div>
+              <div class="meta">試合数 ${p.gamesPlayed} ・ <span class="statusPill ${p.status==='active'?'active':'left'}">${p.status==='active'?'参加中':'退出済み'}</span></div>
+            </div>
+            ${p.status==='active'
+              ? `<button class="btn ghost sm" data-action="leaveParticipant" data-id="${p.id}">退出</button>`
+              : `<button class="btn gold sm" data-action="rejoinParticipant" data-id="${p.id}">再参加</button>`}
+          </div>`).join('')}
+      </div>
+
+      ${notYetIn.length>0 ? `
+      <p class="sub" style="margin-top:16px;">後から来たメンバーを追加：</p>
+      <div class="checkGrid">
+        ${notYetIn.map(m=>`
+          <label class="checkItem" data-action="addLateMember" data-id="${m.id}">
+            ＋ ${escapeHtml(m.name)}
+          </label>`).join('')}
+      </div>` : ''}
+
+      <p class="sub" style="margin-top:16px;">登録外の飛び入りゲスト：</p>
+      <div class="inlineForm">
+        <input type="text" id="guestName" placeholder="ゲスト名">
+        <button class="btn primary" id="addGuestBtn">追加</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>コート数</h2>
+      <div class="row" style="max-width:140px; margin-bottom:4px;">
+        <input type="number" id="courtCountInputLive" min="1" max="10" value="${state.courtCount}">
+      </div>
+    </div>
+
+    <button class="btn danger block" id="endSessionBtn">本日の練習を終了してリセット</button>
+  `;
+}
+
+function renderMatchTab(){
+  if(!state.session){
+    return `<div class="panel"><div class="empty"><div class="icon">📋</div>まだ本日の練習が開始されていません。<br>「本日の参加者」タブから開始してください。</div></div>`;
+  }
+  const s = state.session;
+  const active = activeParticipants();
+  const canGenerate = Math.floor(active.length/4) >= 1;
+
+  const rounds = s.rounds.slice().reverse();
+  const stats = Object.values(s.participants).sort((a,b)=>b.gamesPlayed-a.gamesPlayed || a.name.localeCompare(b.name,'ja'));
+
+  return `
+    <div class="panel" style="display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
+      <div>
+        <h2 style="margin-bottom:2px;">試合表</h2>
+        <p class="sub" style="margin:0;">現在の参加者：${active.length}人 ／ 使用コート：${Math.min(state.courtCount, Math.floor(active.length/4)||state.courtCount)}面</p>
+      </div>
+      <button class="btn primary" id="generateRoundBtn" ${canGenerate?'':'disabled'}>次の試合を作成</button>
+    </div>
+    ${!canGenerate ? `<div class="panel"><p class="sub" style="margin:0;">試合を作るには最低4人の参加者が必要です。「本日の参加者」タブで確認してください。</p></div>` : ''}
+
+    ${s.rounds.length>0 ? `<button class="btn ghost block" id="undoRoundBtn" style="margin-bottom:14px;">直前の試合を取り消す</button>` : ''}
+
+    ${rounds.length===0 ? `<div class="panel"><div class="empty"><div class="icon">🏸</div>まだ試合が作成されていません。<br>上の「次の試合を作成」から始めましょう。</div></div>` :
+      rounds.map(r=>renderRoundCard(r, s)).join('')}
+
+    <div class="panel">
+      <h2>参加者ごとの試合数</h2>
+      <table class="stats">
+        <thead><tr><th>名前</th><th>試合数</th><th>状態</th></tr></thead>
+        <tbody>
+          ${stats.map(p=>`<tr>
+            <td>${escapeHtml(p.name)}</td>
+            <td class="num">${p.gamesPlayed}</td>
+            <td><span class="statusPill ${p.status==='active'?'active':'left'}">${p.status==='active'?'参加中':'退出'}</span></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function courtSVG(names){
+  // names: [teamA1, teamA2, teamB1, teamB2]
+  const short = n => n.length>6 ? n.slice(0,6)+'…' : n;
+  return `
+  <svg viewBox="0 0 240 130" width="100%" height="auto" style="display:block;">
+    <rect x="2" y="2" width="236" height="126" rx="8" fill="var(--court-green-light)"/>
+    <rect x="2" y="2" width="236" height="126" rx="8" fill="none" stroke="var(--court-line)" stroke-width="2"/>
+    <line x1="120" y1="6" x2="120" y2="124" stroke="var(--court-line)" stroke-width="2.5"/>
+    <line x1="60" y1="6" x2="60" y2="124" stroke="var(--court-line)" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>
+    <line x1="180" y1="6" x2="180" y2="124" stroke="var(--court-line)" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>
+    <circle cx="45" cy="35" r="14" fill="#fff"/>
+    <text x="45" y="40" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[0])[0]}</text>
+    <text x="45" y="60" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[0])}</text>
+
+    <circle cx="45" cy="95" r="14" fill="#fff"/>
+    <text x="45" y="100" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[1])[0]}</text>
+    <text x="45" y="118" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[1])}</text>
+
+    <circle cx="195" cy="35" r="14" fill="var(--gold)"/>
+    <text x="195" y="40" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[2])[0]}</text>
+    <text x="195" y="60" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[2])}</text>
+
+    <circle cx="195" cy="95" r="14" fill="var(--gold)"/>
+    <text x="195" y="100" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[3])[0]}</text>
+    <text x="195" y="118" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[3])}</text>
+  </svg>`;
+}
+
+function renderRoundCard(round, session){
+  const nameOf = id => (session.participants[id] && session.participants[id].name) || '?';
+  return `
+    <div class="roundCard">
+      <div class="roundHead">
+        <span class="num">第 ${round.index} 試合</span>
+      </div>
+      <div class="courtsWrap">
+        ${round.matches.map((m,i)=>`
+          <div>
+            <div class="courtLabel">コート ${i+1}</div>
+            ${courtSVG([nameOf(m[0][0]), nameOf(m[0][1]), nameOf(m[1][0]), nameOf(m[1][1])])}
+          </div>`).join('')}
+      </div>
+      ${round.sitting.length>0 ? `<div class="sittingWrap">休憩：<b>${round.sitting.map(nameOf).map(escapeHtml).join('、')}</b></div>` : ''}
+    </div>
+  `;
+}
+
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ---------- events ---------- */
+function bindEvents(){
+  document.querySelectorAll('nav.tabs button').forEach(b=>{
+    b.onclick = ()=>{ activeTab=b.dataset.tab; render(); };
+  });
+
+  const addMemberBtn = document.getElementById('addMemberBtn');
+  if(addMemberBtn){
+    addMemberBtn.onclick = async ()=>{
+      const input = document.getElementById('newMemberName');
+      const name = input.value.trim();
+      if(!name) return;
+      state.members.push({id:uid(), name});
+      input.value='';
+      await persist('メンバーを追加しました');
+    };
+    document.getElementById('newMemberName').onkeydown = e=>{ if(e.key==='Enter') addMemberBtn.click(); };
+  }
+
+  const redownloadBtn = document.getElementById('redownloadBtn');
+  if(redownloadBtn){
+    redownloadBtn.onclick = ()=>{
+      triggerDownload(buildSharedFile(SYNC_ID), 'badminton-scheduler-shared.html');
+      showToast('ファイルを再ダウンロードしました');
+    };
+  }
+
+  document.querySelectorAll('[data-action="deleteMember"]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const id = btn.dataset.id;
+      if(!confirm('このメンバーを削除しますか？')) return;
+      state.members = state.members.filter(m=>m.id!==id);
+      await persist('メンバーを削除しました');
+    };
+  });
+
+  document.querySelectorAll('#todayCheckGrid .checkItem').forEach(label=>{
+    label.onclick = (e)=>{
+      if(e.target.tagName!=='INPUT'){ e.preventDefault(); const cb=label.querySelector('input'); cb.checked=!cb.checked; }
+      label.classList.toggle('checked', label.querySelector('input').checked);
+    };
+  });
+
+  const startBtn = document.getElementById('startSessionBtn');
+  if(startBtn){
+    startBtn.onclick = async ()=>{
+      const checked = Array.from(document.querySelectorAll('#todayCheckGrid input:checked')).map(i=>i.value);
+      if(checked.length<4){ showToast('4人以上選択してください'); return; }
+      const courtCount = parseInt(document.getElementById('courtCountInput').value)||1;
+      state.courtCount = Math.max(1, courtCount);
+      const participants = {};
+      checked.forEach(id=>{
+        const m = state.members.find(mm=>mm.id===id);
+        if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0};
+      });
+      state.session = { startedAt: Date.now(), participants, rounds:[], partnerCounts:{} };
+      activeTab='match';
+      await persist('本日の練習を開始しました');
+    };
+  }
+
+  const courtLive = document.getElementById('courtCountInputLive');
+  if(courtLive){
+    courtLive.onchange = async ()=>{
+      state.courtCount = Math.max(1, parseInt(courtLive.value)||1);
+      await persist('コート数を更新しました');
+    };
+  }
+
+  document.querySelectorAll('[data-action="leaveParticipant"]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      state.session.participants[btn.dataset.id].status='left';
+      await persist('退出にしました');
+    };
+  });
+  document.querySelectorAll('[data-action="rejoinParticipant"]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      state.session.participants[btn.dataset.id].status='active';
+      await persist('再参加にしました');
+    };
+  });
+  document.querySelectorAll('[data-action="addLateMember"]').forEach(label=>{
+    label.onclick = async ()=>{
+      const id = label.dataset.id;
+      const m = state.members.find(mm=>mm.id===id);
+      if(!m) return;
+      state.session.participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak: (state.session.rounds.length)};
+      await persist(`${m.name}さんを追加しました`);
+    };
+  });
+
+  const addGuestBtn = document.getElementById('addGuestBtn');
+  if(addGuestBtn){
+    addGuestBtn.onclick = async ()=>{
+      const input = document.getElementById('guestName');
+      const name = input.value.trim();
+      if(!name) return;
+      const id = uid();
+      state.session.participants[id] = {id, name, status:'active', gamesPlayed:0, restStreak:(state.session.rounds.length)};
+      await persist(`${name}さんを追加しました`);
+    };
+    document.getElementById('guestName').onkeydown = e=>{ if(e.key==='Enter') addGuestBtn.click(); };
+  }
+
+  const endBtn = document.getElementById('endSessionBtn');
+  if(endBtn){
+    endBtn.onclick = async ()=>{
+      if(!confirm('本日の練習を終了し、試合表と参加状況をリセットします。よろしいですか？')) return;
+      state.session = null;
+      activeTab='today';
+      await persist('練習を終了しました');
+    };
+  }
+
+  const genBtn = document.getElementById('generateRoundBtn');
+  if(genBtn){
+    genBtn.onclick = async ()=>{
+      const result = generateRound();
+      if(result.error){ showToast(result.error); return; }
+      commitRound(result);
+      await persist('試合を作成しました');
+    };
+  }
+
+  const undoBtn = document.getElementById('undoRoundBtn');
+  if(undoBtn){
+    undoBtn.onclick = async ()=>{
+      if(!confirm('直前の試合を取り消しますか？試合数のカウントも元に戻ります。')) return;
+      const s = state.session;
+      const last = s.rounds.pop();
+      if(!last) return;
+      last.matches.forEach(m=>{
+        const k1 = pairKey(m[0][0], m[0][1]), k2 = pairKey(m[1][0], m[1][1]);
+        if(s.partnerCounts[k1]) s.partnerCounts[k1]--;
+        if(s.partnerCounts[k2]) s.partnerCounts[k2]--;
+        [...m[0], ...m[1]].forEach(id=>{
+          if(s.participants[id]) s.participants[id].gamesPlayed = Math.max(0, s.participants[id].gamesPlayed-1);
+        });
+      });
+      last.sitting.forEach(id=>{
+        if(s.participants[id]) s.participants[id].restStreak = Math.max(0, s.participants[id].restStreak-1);
+      });
+      await persist('直前の試合を取り消しました');
+    };
+  }
+}
+
+/* ---------- live sync polling ---------- */
+async function pollUpdates(){
+  if(syncing || !SYNC_ID) return;
+  syncing = true;
+  try{
+    const fresh = await loadState();
+    const freshJSON = JSON.stringify(fresh);
+    if(freshJSON !== lastSavedJSON){
+      state = fresh;
+      lastSavedJSON = freshJSON;
+      render();
+    }
+  }catch(e){ /* offline or temporary error - keep showing last known state */ }
+  syncing = false;
+}
+
+/* ---------- init ---------- */
+(async function init(){
+  if(!SYNC_ID){
+    render();
+    return;
+  }
+  try{
+    state = await loadState();
+  }catch(e){
+    state = defaultState();
+    showToast('データの読み込みに失敗しました。通信環境をご確認ください。');
+  }
+  lastSavedJSON = JSON.stringify(state);
+  render();
+  startPolling();
+})();
+</script>
+
+
+</body></html>
