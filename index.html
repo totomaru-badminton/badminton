@@ -644,7 +644,13 @@ function renderMatchTab(){
         <h2 style="margin-bottom:2px;">試合表</h2>
         <p class="sub" style="margin:0;">現在の参加者：${active.length}人 ／ 使用コート：${Math.min(state.courtCount, Math.floor(active.length/4)||state.courtCount)}面</p>
       </div>
-      <button class="btn primary" id="generateRoundBtn" ${canGenerate?'':'disabled'}>次の試合を作成</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+        <button class="btn ghost" id="newDayBtn">🆕 新しい日を開始</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+        <button class="btn ghost" id="newDayBtn">🆕 新しい日を開始</button>
+        <button class="btn primary" id="generateRoundBtn" ${canGenerate?'':'disabled'}>次の試合を作成</button>
+      </div>
+      </div>
     </div>
     ${!canGenerate ? `<div class="panel"><p class="sub" style="margin:0;">試合を作るには最低4人の参加者が必要です。「本日の参加者」タブで確認してください。</p></div>` : ''}
 
@@ -831,6 +837,26 @@ function bindEvents(){
       state.session = null;
       activeTab='today';
       await persist('練習を終了しました');
+    };
+  }
+
+  const newDayBtn = document.getElementById('newDayBtn');
+  if(newDayBtn){
+    newDayBtn.onclick = async ()=>{
+      if(!confirm('新しい日を開始しますか？\n\n本日の参加者・試合履歴・出場回数・連続出場/休憩状況・試合番号をすべてリセットします。\n\nメンバー一覧とコート数、共有設定は残ります。')) return;
+      state.session = null;
+      activeTab = 'today';
+      await persist('新しい日を開始しました');
+    };
+  }
+
+  const newDayBtn = document.getElementById('newDayBtn');
+  if(newDayBtn){
+    newDayBtn.onclick = async ()=>{
+      if(!confirm('新しい日を開始しますか？\n\n本日の参加者・試合履歴・出場回数・連続出場/休憩状況・試合番号をすべてリセットします。\n\nメンバー一覧とコート数、共有設定は残ります。')) return;
+      state.session = null;
+      activeTab = 'today';
+      await persist('新しい日を開始しました');
     };
   }
 
