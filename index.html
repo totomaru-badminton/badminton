@@ -133,6 +133,12 @@
   .compactMatch .courtLabel{min-width:52px;margin:0;font-size:10px;}
   .compactMatch .team{font-weight:700;}
   .compactMatch .vs{font-weight:700;color:var(--ink-soft);}
+  .compactMatch.activeMatch{background:#EAF5EF;border:2px solid var(--court-green-light);box-shadow:0 0 0 2px rgba(46,139,103,.08);}
+  .compactMatch.activeMatch .courtLabel{color:var(--court-green-dark);}
+  .activeBadge{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:12px;background:var(--court-green);color:#fff;font-size:10px;font-weight:700;white-space:nowrap;}
+  .activeToggle{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer;color:var(--ink-soft);}
+  .activeToggle.on{background:var(--court-green);color:#fff;border-color:var(--court-green);}
+
   .roundSelect{accent-color:var(--court-green);}
 
   .roundCard .roundHead .num{font-family:'Oswald'; font-size:13px; font-weight:700; color:var(--court-green-dark); letter-spacing:0.05em;}
@@ -215,12 +221,26 @@ function defaultState(){
   return { members: [], courtCount: 2, session: null };
 }
 
+function normalizeState(raw){
+  const st = raw || defaultState();
+  if(st.session){
+    if(!st.session.partnerCounts) st.session.partnerCounts = {};
+    if(!Array.isArray(st.session.rounds)) st.session.rounds = [];
+    if(!Array.isArray(st.session.activeMatches)) st.session.activeMatches = [];
+    Object.values(st.session.participants || {}).forEach(p=>{
+      if(typeof p.gamesPlayed !== 'number') p.gamesPlayed = 0;
+      if(typeof p.restStreak !== 'number') p.restStreak = 0;
+    });
+  }
+  return st;
+}
+
 async function loadState(){
   if(!SYNC_ID) return defaultState();
   try{
     const res = await fetch(`${SYNC_BASE}/${SYNC_ID}`, { headers:{'Accept':'application/json'} });
     if(!res.ok) throw new Error('load failed: '+res.status);
-    return await res.json();
+    return normalizeState(await res.json());
   }catch(e){
     throw e;
   }
@@ -395,6 +415,7 @@ function generateRound(){
 
 function commitRound(result){
   const s = state.session;
+  if(!Array.isArray(s.activeMatches)) s.activeMatches=[];
   const round = { index: s.rounds.length+1, matches: result.matches.map(m=>[
       [m[0][0].id,m[0][1].id], [m[1][0].id,m[1][1].id]
     ]), sitting: result.sitting.map(p=>p.id) };
@@ -574,9 +595,21 @@ function renderMatchTab(){
 
 function renderRoundCard(round,session){
   const nameOf=id=>(session.participants[id]&&session.participants[id].name)||'?';
+  const activeSet=new Set(session.activeMatches || []);
   return `<div class="roundCard compactRound">
     <div class="roundHead"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" class="roundSelect" value="${round.index}" style="width:17px;height:17px;"><span class="num">第 ${round.index} 試合</span></label></div>
-    <div class="matchList">${round.matches.map((m,i)=>`<div class="compactMatch"><span class="courtLabel">コート${i+1}</span><span class="team">${escapeHtml(nameOf(m[0][0]))}・${escapeHtml(nameOf(m[0][1]))}</span><span class="vs">vs</span><span class="team">${escapeHtml(nameOf(m[1][0]))}・${escapeHtml(nameOf(m[1][1]))}</span></div>`).join('')}</div>
+    <div class="matchList">${round.matches.map((m,i)=>{
+      const key=`${round.index}:${i}`;
+      const isActive=activeSet.has(key);
+      return `<div class="compactMatch ${isActive?'activeMatch':''}">
+        <span class="courtLabel">コート${i+1}</span>
+        <span class="team">${escapeHtml(nameOf(m[0][0]))}・${escapeHtml(nameOf(m[0][1]))}</span>
+        <span class="vs">vs</span>
+        <span class="team">${escapeHtml(nameOf(m[1][0]))}・${escapeHtml(nameOf(m[1][1]))}</span>
+        ${isActive?'<span class="activeBadge">● 実施中</span>':''}
+        <button class="activeToggle ${isActive?'on':''}" data-action="toggleActiveMatch" data-round="${round.index}" data-match="${i}">${isActive?'実施中を解除':'実施中にする'}</button>
+      </div>`;
+    }).join('')}</div>
     ${round.sitting.length>0?`<div class="sittingWrap">休憩：<b>${round.sitting.map(nameOf).map(escapeHtml).join('、')}</b></div>`:''}
   </div>`;
 }
@@ -632,7 +665,7 @@ function bindEvents(){
         const m = state.members.find(mm=>mm.id===id);
         if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0};
       });
-      state.session = { startedAt: Date.now(), participants, rounds:[], partnerCounts:{} };
+      state.session = { startedAt: Date.now(), participants, rounds:[], partnerCounts:{}, activeMatches:[] };
       activeTab='match';
       await persist('本日の練習を開始しました');
     };
@@ -711,6 +744,17 @@ function bindEvents(){
     };
   }
 
+  document.querySelectorAll('[data-action="toggleActiveMatch"]').forEach(btn=>{
+    btn.onclick=async()=>{
+      const key=`${btn.dataset.round}:${btn.dataset.match}`;
+      if(!state.session.activeMatches) state.session.activeMatches=[];
+      const i=state.session.activeMatches.indexOf(key);
+      if(i>=0) state.session.activeMatches.splice(i,1);
+      else state.session.activeMatches.push(key);
+      await persist(i>=0?'実施中を解除しました':'実施中にしました');
+    };
+  });
+
   const cancelSelectedBtn=document.getElementById('cancelSelectedBtn');
   if(cancelSelectedBtn){
     cancelSelectedBtn.onclick=async()=>{
@@ -725,7 +769,15 @@ function bindEvents(){
         if(ss.partnerCounts[k2]) ss.partnerCounts[k2]--;
         [...m[0],...m[1]].forEach(id=>{if(ss.participants[id])ss.participants[id].gamesPlayed=Math.max(0,ss.participants[id].gamesPlayed-1);});
       }));
+      const keptOldIndices = ss.rounds.filter(r=>!remove.has(r.index)).map(r=>r.index);
+      const oldToNew = {};
+      keptOldIndices.forEach((oldIndex,i)=>{ oldToNew[oldIndex]=i+1; });
       ss.rounds=ss.rounds.filter(r=>!remove.has(r.index));
+      ss.activeMatches = (ss.activeMatches || []).flatMap(key=>{
+        const parts=key.split(':');
+        const oldIndex=Number(parts[0]), matchIndex=Number(parts[1]);
+        return oldToNew[oldIndex] ? [`${oldToNew[oldIndex]}:${matchIndex}`] : [];
+      });
       Object.values(ss.participants).forEach(p=>p.restStreak=0);
       ss.rounds.forEach(r=>{
         const playing=new Set(r.matches.flat(2));
@@ -763,7 +815,7 @@ async function pollUpdates(){
     return;
   }
   try{
-    state = await loadState();
+    state = normalizeState(await loadState());
   }catch(e){
     state = defaultState();
     showToast('データの読み込みに失敗しました。通信環境をご確認ください。');
