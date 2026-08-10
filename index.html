@@ -123,19 +123,23 @@
   .statusPill.left{background:#FBEAE6; color:var(--coral-dark);}
 
   .roundCard{
-    border:1.5px solid var(--line); border-radius:var(--radius); padding:10px 12px; margin-bottom:8px; background:#fbfcfa;
+    border:1.5px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:12px; background:#fbfcfa;
   }
-  .roundCard .roundHead{display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;}
+  .roundCard .roundHead{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;}
+  .compactRound{padding:10px 12px;}
+  .compactRound .roundHead{margin-bottom:7px;}
+  .matchList{display:flex;flex-direction:column;gap:6px;}
+  .compactMatch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;background:#fff;border:1px solid var(--line);border-radius:9px;font-size:13px;}
+  .compactMatch .courtLabel{min-width:52px;margin:0;font-size:10px;}
+  .compactMatch .team{font-weight:700;}
+  .compactMatch .vs{font-weight:700;color:var(--ink-soft);}
+  .roundSelect{accent-color:var(--court-green);}
+
   .roundCard .roundHead .num{font-family:'Oswald'; font-size:13px; font-weight:700; color:var(--court-green-dark); letter-spacing:0.05em;}
-  .matchList{display:flex; flex-direction:column; gap:5px;}
-  .matchRow{display:flex; align-items:center; gap:8px; padding:7px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; font-size:13px;}
-  .matchRow input{width:16px; height:16px; flex:0 0 auto; accent-color:var(--court-green);}
-  .matchCourt{font-size:10.5px; color:var(--ink-soft); min-width:48px; font-weight:700;}
-  .matchNames{font-weight:700; color:var(--ink); line-height:1.35; flex:1;}
-  .matchVs{color:var(--ink-soft); font-weight:500; padding:0 4px;}
-  .sittingWrap{margin-top:6px; padding-top:6px; border-top:1px dashed var(--line); font-size:11.5px; color:var(--ink-soft);}
+  .courtsWrap{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px;}
+  .courtLabel{font-size:11px; font-weight:700; color:var(--ink-soft); margin-bottom:4px; letter-spacing:0.04em;}
+  .sittingWrap{margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); font-size:12.5px; color:var(--ink-soft);}
   .sittingWrap b{color:var(--ink);}
-  .cancelSelectedWrap{display:flex; justify-content:flex-end; margin:0 0 10px;}
 
   table.stats{width:100%; border-collapse:collapse; font-size:13px;}
   table.stats th, table.stats td{text-align:left; padding:8px 6px; border-bottom:1px solid var(--line);}
@@ -180,7 +184,7 @@
     <div class="panel">
       <h2>はじめに：共有データを作成</h2>
       <p class="sub">最初の1回だけ、下のボタンで「みんなで共有するデータ」を作成してください。作成すると、この設定を反映したファイルが自動でダウンロードされます。</p>
-      <button class="btn primary block" id="createSharedBtn" style="font-size:15px; padding:14px;" disabled="">作成中…</button>
+      <button class="btn primary block" id="createSharedBtn" style="font-size:15px; padding:14px;">共有データを作成する</button>
     </div>
     <div class="panel">
       <h2>この後の流れ（あなただけの作業です）</h2>
@@ -351,127 +355,44 @@ function generateRound(){
   const maxCourts = Math.floor(active.length/4);
   const courts = Math.min(state.courtCount, maxCourts);
   if(courts<1) return {error:'4人以上の参加者が必要です。'};
-
   const numPlaying = courts*4;
-  const totalRounds = s.rounds.length;
 
-  // 「途中参加したから優先」ではなく、
-  // その人が参加してから現在までの出場機会に対して、どれだけ出場できているかで公平さを判断する。
-  // これにより、途中参加者が過去の試合分まで取り戻す必要はなく、
-  // 参加した時点から他の参加者と同じ割合で出場できるようにする。
-  function joinedRoundOf(p){
-    // 新しいデータでは joinedRound を保持。旧データは0（最初から参加）として扱う。
-    return Number.isFinite(p.joinedRound) ? p.joinedRound : 0;
-  }
-
-  function eligibleRounds(p){
-    return Math.max(0, totalRounds - joinedRoundOf(p));
-  }
-
-  // その人が「本来これくらい出ているはず」という期待出場数との差。
-  // 例：6人・1面なら1人あたり各ラウンド4/6回が目安。
-  function fairnessDeficit(p){
-    return eligibleRounds(p) * (numPlaying / active.length) - (p.gamesPlayed || 0);
-  }
-
-  function consecutivePlayed(id){
-    let streak=0;
-    for(let i=s.rounds.length-1;i>=0;i--){
-      const r=s.rounds[i];
-      const played = r.matches.some(m=>m.flat().includes(id));
-      if(!played) break;
-      streak++;
-    }
-    return streak;
-  }
-
-  function recentRestRounds(id){
-    let rest=0;
-    for(let i=s.rounds.length-1;i>=0;i--){
-      const r=s.rounds[i];
-      const played = r.matches.some(m=>m.flat().includes(id));
-      if(played) break;
-      rest++;
-    }
-    return rest;
-  }
-
-  // 基本は「参加してからの出場割合」が不足している人を優先。
-  // 途中参加者だから、という理由だけで過去分を取り戻させることはしない。
-  // ただし、出場回数が同程度なら連続出場を避け、休憩していた人を優先する。
-  const sorted = [...active].sort((a,b)=>{
-    const da=fairnessDeficit(a), db=fairnessDeficit(b);
-    if(Math.abs(da-db)>0.05) return db-da; // 不足が大きい人から
-
-    const sa=consecutivePlayed(a.id), sb=consecutivePlayed(b.id);
-    if(sa!==sb) return sa-sb; // 連続出場が少ない人を優先
-
-    const ra=recentRestRounds(a.id), rb=recentRestRounds(b.id);
-    if(ra!==rb) return rb-ra; // 休憩していた人を優先
-
-    const ga=a.gamesPlayed||0, gb=b.gamesPlayed||0;
-    if(ga!==gb) return ga-gb;
-    return Math.random()-0.5;
-  });
-
-  let playing = sorted.slice(0,numPlaying);
-
-  // 人数が多い場合は、3試合以上の連続出場をできるだけ避ける。
-  // ただし、全体の公平性を大きく崩すような入れ替えはしない。
-  if(active.length > numPlaying){
-    const overplayed = playing
-      .filter(p=>consecutivePlayed(p.id)>=2)
-      .sort((a,b)=>consecutivePlayed(b.id)-consecutivePlayed(a.id));
-
-    const sittingCandidates = sorted
-      .slice(numPlaying)
-      .filter(p=>consecutivePlayed(p.id)<2)
-      .sort((a,b)=>fairnessDeficit(b)-fairnessDeficit(a));
-
-    for(const out of overplayed){
-      const incoming = sittingCandidates.find(p=>{
-        // 「遅れてきたから」という理由ではなく、同程度以上の公平性不足がある場合だけ交代。
-        return fairnessDeficit(p) >= fairnessDeficit(out)-0.35;
-      });
-      if(!incoming) continue;
-      const idx=playing.findIndex(p=>p.id===out.id);
-      if(idx>=0){
-        playing[idx]=incoming;
-        const ci=sittingCandidates.indexOf(incoming);
-        if(ci>=0) sittingCandidates.splice(ci,1);
-      }
-    }
-  }
-
-  const playingIds = new Set(playing.map(p=>p.id));
-  const sitting = active.filter(p=>!playingIds.has(p.id));
+  // 途中参加者を特別扱いせず、「現在参加している人」の出場回数を基準に公平化。
+  // 出場回数が少ない人を優先し、同数なら休憩が長い人、直前出場者は少し後回し。
+  const scorePlayer = p => {
+    const minGames = Math.min(...active.map(x=>x.gamesPlayed));
+    let score = (p.gamesPlayed-minGames)*100;
+    score -= p.restStreak*10;
+    if(p.restStreak===0 && s.rounds.length>0) score += 25;
+    if(p.restStreak>=2) score -= 12;
+    return score;
+  };
+  const playing = [...active].sort((a,b)=>scorePlayer(a)-scorePlayer(b) || a.name.localeCompare(b.name,'ja')).slice(0,numPlaying);
+  const playingSet = new Set(playing.map(p=>p.id));
+  const sitting = active.filter(p=>!playingSet.has(p.id));
 
   let best=null, bestScore=Infinity;
-  for(let attempt=0; attempt<80; attempt++){
+  for(let attempt=0; attempt<160; attempt++){
     const shuffled=[...playing].sort(()=>Math.random()-0.5);
     const groups=[];
     for(let c=0;c<courts;c++) groups.push(shuffled.slice(c*4,c*4+4));
     let totalScore=0;
-    const matches = groups.map(g=>{
-      const splits=[
-        [[g[0],g[1]],[g[2],g[3]]],
-        [[g[0],g[2]],[g[1],g[3]]],
-        [[g[0],g[3]],[g[1],g[2]]],
-      ];
-      let bestSplit=null, bestSplitScore=Infinity;
+    const matches=groups.map(g=>{
+      const splits=[[[g[0],g[1]],[g[2],g[3]]],[[g[0],g[2]],[g[1],g[3]]],[[g[0],g[3]],[g[1],g[2]]]];
+      let bestSplit=null,bestSplitScore=Infinity;
       for(const [p1,p2] of splits){
         const k1=pairKey(p1[0].id,p1[1].id), k2=pairKey(p2[0].id,p2[1].id);
-        const score=(s.partnerCounts[k1]||0)*3 + (s.partnerCounts[k2]||0)*3;
-        if(score<bestSplitScore){bestSplitScore=score; bestSplit=[p1,p2];}
+        let score=(s.partnerCounts[k1]||0)*12+(s.partnerCounts[k2]||0)*12;
+        if(score<bestSplitScore){bestSplitScore=score;bestSplit=[p1,p2];}
       }
       totalScore+=bestSplitScore;
       return bestSplit;
     });
-    if(totalScore<bestScore){bestScore=totalScore; best=matches;}
+    if(totalScore<bestScore){bestScore=totalScore;best=matches;}
   }
-
-  return { courts, playing, sitting, matches:best };
+  return {courts,playing,sitting,matches:best};
 }
+
 function commitRound(result){
   const s = state.session;
   const round = { index: s.rounds.length+1, matches: result.matches.map(m=>[
@@ -631,103 +552,33 @@ function renderMatchTab(){
   if(!state.session){
     return `<div class="panel"><div class="empty"><div class="icon">📋</div>まだ本日の練習が開始されていません。<br>「本日の参加者」タブから開始してください。</div></div>`;
   }
-  const s = state.session;
-  const active = activeParticipants();
-  const canGenerate = Math.floor(active.length/4) >= 1;
-
-  const rounds = s.rounds.slice().reverse();
-  const stats = Object.values(s.participants).sort((a,b)=>b.gamesPlayed-a.gamesPlayed || a.name.localeCompare(b.name,'ja'));
-
+  const s=state.session, active=activeParticipants();
+  const canGenerate=Math.floor(active.length/4)>=1;
+  const rounds=s.rounds.slice().reverse();
+  const stats=Object.values(s.participants).sort((a,b)=>a.gamesPlayed-b.gamesPlayed || a.name.localeCompare(b.name,'ja'));
   return `
-    <div class="panel" style="display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
-      <div>
-        <h2 style="margin-bottom:2px;">試合表</h2>
-        <p class="sub" style="margin:0;">現在の参加者：${active.length}人 ／ 使用コート：${Math.min(state.courtCount, Math.floor(active.length/4)||state.courtCount)}面</p>
-      </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-        <button class="btn ghost" id="newDayBtn">🆕 新しい日を開始</button>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-        <button class="btn ghost" id="newDayBtn">🆕 新しい日を開始</button>
+    <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+      <div><h2 style="margin-bottom:2px;">試合表</h2><p class="sub" style="margin:0;">現在の参加者：${active.length}人 ／ 使用コート：${Math.min(state.courtCount,Math.floor(active.length/4)||state.courtCount)}面</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn primary" id="generateRoundBtn" ${canGenerate?'':'disabled'}>次の試合を作成</button>
-      </div>
+        <button class="btn ghost" id="newDayBtn">🆕 新しい日を開始</button>
       </div>
     </div>
-    ${!canGenerate ? `<div class="panel"><p class="sub" style="margin:0;">試合を作るには最低4人の参加者が必要です。「本日の参加者」タブで確認してください。</p></div>` : ''}
-
-    ${s.rounds.length>0 ? `<div class="cancelSelectedWrap"><button class="btn ghost" id="cancelSelectedMatchBtn">選択した試合を取り消す</button></div>` : ''}
-
-    ${rounds.length===0 ? `<div class="panel"><div class="empty"><div class="icon">🏸</div>まだ試合が作成されていません。<br>上の「次の試合を作成」から始めましょう。</div></div>` :
-      rounds.map(r=>renderRoundCard(r, s)).join('')}
-
-    <div class="panel">
-      <h2>参加者ごとの試合数</h2>
-      <table class="stats">
-        <thead><tr><th>名前</th><th>試合数</th><th>状態</th></tr></thead>
-        <tbody>
-          ${stats.map(p=>`<tr>
-            <td>${escapeHtml(p.name)}</td>
-            <td class="num">${p.gamesPlayed}</td>
-            <td><span class="statusPill ${p.status==='active'?'active':'left'}">${p.status==='active'?'参加中':'退出'}</span></td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>
-  `;
+    ${!canGenerate?`<div class="panel"><p class="sub" style="margin:0;">試合を作るには最低4人の参加者が必要です。「本日の参加者」タブで確認してください。</p></div>`:''}
+    ${rounds.length>0?`<div class="panel" style="padding:10px 14px;"><p class="sub" style="margin:0;">取り消したい試合を選択してください。</p><button class="btn ghost" id="cancelSelectedBtn" style="margin-top:8px;">選択した試合を取り消す</button></div>`:''}
+    ${rounds.length===0?`<div class="panel"><div class="empty"><div class="icon">🏸</div>まだ試合が作成されていません。<br>上の「次の試合を作成」から始めましょう。</div></div>`:rounds.map(r=>renderRoundCard(r,s)).join('')}
+    <div class="panel"><h2>参加者ごとの試合数</h2><table class="stats"><thead><tr><th>名前</th><th>試合数</th><th>状態</th></tr></thead><tbody>
+      ${stats.map(p=>`<tr><td>${escapeHtml(p.name)}</td><td class="num">${p.gamesPlayed}</td><td><span class="statusPill ${p.status==='active'?'active':'left'}">${p.status==='active'?'参加中':'退出'}</span></td></tr>`).join('')}
+    </tbody></table></div>`;
 }
 
-function renderMatchRow(roundIndex, matchIndex, match, session){
-  const nameOf = id => (session.participants[id] && session.participants[id].name) || '?';
-  const teamA = match[0].map(nameOf).map(escapeHtml).join('・');
-  const teamB = match[1].map(nameOf).map(escapeHtml).join('・');
-  const key = `${roundIndex}:${matchIndex}`;
-  return `
-    <label class="matchRow">
-      <input type="radio" name="cancelMatch" value="${key}" aria-label="第${roundIndex}試合 コート${matchIndex+1}を選択">
-      <span class="matchCourt">コート ${matchIndex+1}</span>
-      <span class="matchNames">${teamA}<span class="matchVs">vs</span>${teamB}</span>
-    </label>`;
-}
-
-function renderRoundCard(round, session){
-  const matchesHtml = round.matches.length
-    ? round.matches.map((m,i)=>renderMatchRow(round.index, i, m, session)).join('')
-    : `<div class="sub" style="padding:4px 0;">この試合は取り消されました。</div>`;
-  const nameOf = id => (session.participants[id] && session.participants[id].name) || '?';
-  return `
-    <div class="roundCard">
-      <div class="roundHead">
-        <span class="num">第 ${round.index} 試合</span>
-      </div>
-      <div class="matchList">${matchesHtml}</div>
-      ${round.sitting.length>0 ? `<div class="sittingWrap">休憩：<b>${round.sitting.map(nameOf).map(escapeHtml).join('、')}</b></div>` : ''}
-    </div>
-  `;
-}
-
-function recomputeSessionStats(){
-  const s = state.session;
-  if(!s) return;
-  s.partnerCounts = {};
-  Object.values(s.participants).forEach(p=>{ p.gamesPlayed=0; p.restStreak=0; });
-
-  s.rounds.forEach(round=>{
-    const playingIds = new Set();
-    round.matches.forEach(m=>{
-      const k1=pairKey(m[0][0],m[0][1]), k2=pairKey(m[1][0],m[1][1]);
-      s.partnerCounts[k1]=(s.partnerCounts[k1]||0)+1;
-      s.partnerCounts[k2]=(s.partnerCounts[k2]||0)+1;
-      [...m[0],...m[1]].forEach(id=>{
-        playingIds.add(id);
-        if(s.participants[id]){
-          s.participants[id].gamesPlayed += 1;
-          s.participants[id].restStreak = 0;
-        }
-      });
-    });
-    Object.values(s.participants).forEach(p=>{
-      if(!playingIds.has(p.id)) p.restStreak += 1;
-    });
-  });
+function renderRoundCard(round,session){
+  const nameOf=id=>(session.participants[id]&&session.participants[id].name)||'?';
+  return `<div class="roundCard compactRound">
+    <div class="roundHead"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" class="roundSelect" value="${round.index}" style="width:17px;height:17px;"><span class="num">第 ${round.index} 試合</span></label></div>
+    <div class="matchList">${round.matches.map((m,i)=>`<div class="compactMatch"><span class="courtLabel">コート${i+1}</span><span class="team">${escapeHtml(nameOf(m[0][0]))}・${escapeHtml(nameOf(m[0][1]))}</span><span class="vs">vs</span><span class="team">${escapeHtml(nameOf(m[1][0]))}・${escapeHtml(nameOf(m[1][1]))}</span></div>`).join('')}</div>
+    ${round.sitting.length>0?`<div class="sittingWrap">休憩：<b>${round.sitting.map(nameOf).map(escapeHtml).join('、')}</b></div>`:''}
+  </div>`;
 }
 
 function escapeHtml(str){
@@ -779,7 +630,7 @@ function bindEvents(){
       const participants = {};
       checked.forEach(id=>{
         const m = state.members.find(mm=>mm.id===id);
-        if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0, joinedRound:0};
+        if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0};
       });
       state.session = { startedAt: Date.now(), participants, rounds:[], partnerCounts:{} };
       activeTab='match';
@@ -812,7 +663,7 @@ function bindEvents(){
       const id = label.dataset.id;
       const m = state.members.find(mm=>mm.id===id);
       if(!m) return;
-      state.session.participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0, joinedRound:state.session.rounds.length};
+      state.session.participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak: (state.session.rounds.length)};
       await persist(`${m.name}さんを追加しました`);
     };
   });
@@ -824,7 +675,7 @@ function bindEvents(){
       const name = input.value.trim();
       if(!name) return;
       const id = uid();
-      state.session.participants[id] = {id, name, status:'active', gamesPlayed:0, restStreak:0, joinedRound:state.session.rounds.length};
+      state.session.participants[id] = {id, name, status:'active', gamesPlayed:0, restStreak:(state.session.rounds.length)};
       await persist(`${name}さんを追加しました`);
     };
     document.getElementById('guestName').onkeydown = e=>{ if(e.key==='Enter') addGuestBtn.click(); };
@@ -840,26 +691,6 @@ function bindEvents(){
     };
   }
 
-  const newDayBtn = document.getElementById('newDayBtn');
-  if(newDayBtn){
-    newDayBtn.onclick = async ()=>{
-      if(!confirm('新しい日を開始しますか？\n\n本日の参加者・試合履歴・出場回数・連続出場/休憩状況・試合番号をすべてリセットします。\n\nメンバー一覧とコート数、共有設定は残ります。')) return;
-      state.session = null;
-      activeTab = 'today';
-      await persist('新しい日を開始しました');
-    };
-  }
-
-  const newDayBtn = document.getElementById('newDayBtn');
-  if(newDayBtn){
-    newDayBtn.onclick = async ()=>{
-      if(!confirm('新しい日を開始しますか？\n\n本日の参加者・試合履歴・出場回数・連続出場/休憩状況・試合番号をすべてリセットします。\n\nメンバー一覧とコート数、共有設定は残ります。')) return;
-      state.session = null;
-      activeTab = 'today';
-      await persist('新しい日を開始しました');
-    };
-  }
-
   const genBtn = document.getElementById('generateRoundBtn');
   if(genBtn){
     genBtn.onclick = async ()=>{
@@ -870,34 +701,43 @@ function bindEvents(){
     };
   }
 
-  const cancelSelectedBtn = document.getElementById('cancelSelectedMatchBtn');
-  if(cancelSelectedBtn){
-    cancelSelectedBtn.onclick = async ()=>{
-      const selected = document.querySelector('input[name="cancelMatch"]:checked');
-      if(!selected){
-        showToast('取り消す試合を選択してください');
-        return;
-      }
-      const [roundIndexStr, matchIndexStr] = selected.value.split(':');
-      const roundIndex = parseInt(roundIndexStr,10);
-      const matchIndex = parseInt(matchIndexStr,10);
-      const s = state.session;
-      const round = s.rounds.find(r=>r.index===roundIndex);
-      if(!round || !round.matches[matchIndex]) return;
-      const m = round.matches[matchIndex];
-      const nameOf = id => (s.participants[id] && s.participants[id].name) || '?';
-      const matchName = `${m[0].map(nameOf).join('・')} vs ${m[1].map(nameOf).join('・')}`;
-      if(!confirm(`「${matchName}」を取り消しますか？\n試合数のカウントも更新されます。`)) return;
+  const newDayBtn=document.getElementById('newDayBtn');
+  if(newDayBtn){
+    newDayBtn.onclick=async()=>{
+      if(!confirm('新しい日を開始しますか？\n\n本日の参加者・試合履歴・出場回数・連続出場/休憩状況・試合番号をリセットします。\n\nメンバー一覧と共有設定は残ります。')) return;
+      state.session=null;
+      activeTab='today';
+      await persist('新しい日を開始しました');
+    };
+  }
 
-      round.matches.splice(matchIndex,1);
-      if(round.matches.length===0){
-        s.rounds = s.rounds.filter(r=>r!==round);
-      }
-      s.rounds.forEach((r,i)=>{ r.index=i+1; });
-      recomputeSessionStats();
+  const cancelSelectedBtn=document.getElementById('cancelSelectedBtn');
+  if(cancelSelectedBtn){
+    cancelSelectedBtn.onclick=async()=>{
+      const selected=Array.from(document.querySelectorAll('.roundSelect:checked')).map(x=>Number(x.value));
+      if(!selected.length){showToast('取り消す試合を選択してください');return;}
+      if(!confirm(`選択した${selected.length}試合を取り消しますか？出場回数も元に戻します。`)) return;
+      const ss=state.session, remove=new Set(selected);
+      const removed=ss.rounds.filter(r=>remove.has(r.index));
+      removed.forEach(round=>round.matches.forEach(m=>{
+        const k1=pairKey(m[0][0],m[0][1]),k2=pairKey(m[1][0],m[1][1]);
+        if(ss.partnerCounts[k1]) ss.partnerCounts[k1]--;
+        if(ss.partnerCounts[k2]) ss.partnerCounts[k2]--;
+        [...m[0],...m[1]].forEach(id=>{if(ss.participants[id])ss.participants[id].gamesPlayed=Math.max(0,ss.participants[id].gamesPlayed-1);});
+      }));
+      ss.rounds=ss.rounds.filter(r=>!remove.has(r.index));
+      Object.values(ss.participants).forEach(p=>p.restStreak=0);
+      ss.rounds.forEach(r=>{
+        const playing=new Set(r.matches.flat(2));
+        Object.values(ss.participants).forEach(p=>{
+          if(p.status==='active') p.restStreak=playing.has(p.id)?0:p.restStreak+1;
+        });
+      });
+      ss.rounds.forEach((r,i)=>r.index=i+1);
       await persist('選択した試合を取り消しました');
     };
   }
+
 }
 
 /* ---------- live sync polling ---------- */
