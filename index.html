@@ -353,13 +353,98 @@ function generateRound(){
   if(courts<1) return {error:'4人以上の参加者が必要です。'};
 
   const numPlaying = courts*4;
+  const totalRounds = s.rounds.length;
+
+  // 「途中参加したから優先」ではなく、
+  // その人が参加してから現在までの出場機会に対して、どれだけ出場できているかで公平さを判断する。
+  // これにより、途中参加者が過去の試合分まで取り戻す必要はなく、
+  // 参加した時点から他の参加者と同じ割合で出場できるようにする。
+  function joinedRoundOf(p){
+    // 新しいデータでは joinedRound を保持。旧データは0（最初から参加）として扱う。
+    return Number.isFinite(p.joinedRound) ? p.joinedRound : 0;
+  }
+
+  function eligibleRounds(p){
+    return Math.max(0, totalRounds - joinedRoundOf(p));
+  }
+
+  // その人が「本来これくらい出ているはず」という期待出場数との差。
+  // 例：6人・1面なら1人あたり各ラウンド4/6回が目安。
+  function fairnessDeficit(p){
+    return eligibleRounds(p) * (numPlaying / active.length) - (p.gamesPlayed || 0);
+  }
+
+  function consecutivePlayed(id){
+    let streak=0;
+    for(let i=s.rounds.length-1;i>=0;i--){
+      const r=s.rounds[i];
+      const played = r.matches.some(m=>m.flat().includes(id));
+      if(!played) break;
+      streak++;
+    }
+    return streak;
+  }
+
+  function recentRestRounds(id){
+    let rest=0;
+    for(let i=s.rounds.length-1;i>=0;i--){
+      const r=s.rounds[i];
+      const played = r.matches.some(m=>m.flat().includes(id));
+      if(played) break;
+      rest++;
+    }
+    return rest;
+  }
+
+  // 基本は「参加してからの出場割合」が不足している人を優先。
+  // 途中参加者だから、という理由だけで過去分を取り戻させることはしない。
+  // ただし、出場回数が同程度なら連続出場を避け、休憩していた人を優先する。
   const sorted = [...active].sort((a,b)=>{
-    if(a.gamesPlayed!==b.gamesPlayed) return a.gamesPlayed-b.gamesPlayed;
-    if(a.restStreak!==b.restStreak) return b.restStreak-a.restStreak;
+    const da=fairnessDeficit(a), db=fairnessDeficit(b);
+    if(Math.abs(da-db)>0.05) return db-da; // 不足が大きい人から
+
+    const sa=consecutivePlayed(a.id), sb=consecutivePlayed(b.id);
+    if(sa!==sb) return sa-sb; // 連続出場が少ない人を優先
+
+    const ra=recentRestRounds(a.id), rb=recentRestRounds(b.id);
+    if(ra!==rb) return rb-ra; // 休憩していた人を優先
+
+    const ga=a.gamesPlayed||0, gb=b.gamesPlayed||0;
+    if(ga!==gb) return ga-gb;
     return Math.random()-0.5;
   });
-  const playing = sorted.slice(0,numPlaying);
-  const sitting = sorted.slice(numPlaying);
+
+  let playing = sorted.slice(0,numPlaying);
+
+  // 人数が多い場合は、3試合以上の連続出場をできるだけ避ける。
+  // ただし、全体の公平性を大きく崩すような入れ替えはしない。
+  if(active.length > numPlaying){
+    const overplayed = playing
+      .filter(p=>consecutivePlayed(p.id)>=2)
+      .sort((a,b)=>consecutivePlayed(b.id)-consecutivePlayed(a.id));
+
+    const sittingCandidates = sorted
+      .slice(numPlaying)
+      .filter(p=>consecutivePlayed(p.id)<2)
+      .sort((a,b)=>fairnessDeficit(b)-fairnessDeficit(a));
+
+    for(const out of overplayed){
+      const incoming = sittingCandidates.find(p=>{
+        // 「遅れてきたから」という理由ではなく、同程度以上の公平性不足がある場合だけ交代。
+        return fairnessDeficit(p) >= fairnessDeficit(out)-0.35;
+      });
+      if(!incoming) continue;
+      const idx=playing.findIndex(p=>p.id===out.id);
+      if(idx>=0){
+        playing[idx]=incoming;
+        const ci=sittingCandidates.indexOf(incoming);
+        if(ci>=0) sittingCandidates.splice(ci,1);
+      }
+    }
+  }
+
+  const playingIds = new Set(playing.map(p=>p.id));
+  const sitting = active.filter(p=>!playingIds.has(p.id));
 
   let best=null, bestScore=Infinity;
   for(let attempt=0; attempt<80; attempt++){
@@ -387,7 +472,6 @@ function generateRound(){
 
   return { courts, playing, sitting, matches:best };
 }
-
 function commitRound(result){
   const s = state.session;
   const round = { index: s.rounds.length+1, matches: result.matches.map(m=>[
@@ -689,7 +773,7 @@ function bindEvents(){
       const participants = {};
       checked.forEach(id=>{
         const m = state.members.find(mm=>mm.id===id);
-        if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0};
+        if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0, joinedRound:0};
       });
       state.session = { startedAt: Date.now(), participants, rounds:[], partnerCounts:{} };
       activeTab='match';
@@ -722,7 +806,7 @@ function bindEvents(){
       const id = label.dataset.id;
       const m = state.members.find(mm=>mm.id===id);
       if(!m) return;
-      state.session.participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak: (state.session.rounds.length)};
+      state.session.participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, restStreak:0, joinedRound:state.session.rounds.length};
       await persist(`${m.name}さんを追加しました`);
     };
   });
@@ -734,7 +818,7 @@ function bindEvents(){
       const name = input.value.trim();
       if(!name) return;
       const id = uid();
-      state.session.participants[id] = {id, name, status:'active', gamesPlayed:0, restStreak:(state.session.rounds.length)};
+      state.session.participants[id] = {id, name, status:'active', gamesPlayed:0, restStreak:0, joinedRound:state.session.rounds.length};
       await persist(`${name}さんを追加しました`);
     };
     document.getElementById('guestName').onkeydown = e=>{ if(e.key==='Enter') addGuestBtn.click(); };
