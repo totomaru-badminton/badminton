@@ -1,11 +1,10 @@
 <!DOCTYPE html>
-<html lang="ja">
-<head>
+<html lang="ja"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <title>バド割 — ダブルス組み合わせメーカー</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Zen+Kaku+Gothic+New:wght@500;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&amp;family=Inter:wght@400;500;600;700&amp;family=Zen+Kaku+Gothic+New:wght@500;700;900&amp;display=swap" rel="stylesheet">
 <style>
   :root{
     --court-green: #1F6F54;
@@ -165,14 +164,28 @@
       <p>サークルのダブルス組み合わせを、公平に自動で。</p>
     </div>
   </div>
-  <nav class="tabs">
+  <nav class="tabs" style="display: none;">
     <button data-tab="members" class="active">メンバー管理</button>
     <button data-tab="today">本日の参加者<span class="badge" id="todayBadge" style="display:none"></span></button>
     <button data-tab="match">試合表</button>
   </nav>
 </header>
 
-<main id="main"></main>
+<main id="main">
+    <div class="panel">
+      <h2>はじめに：共有データを作成</h2>
+      <p class="sub">最初の1回だけ、下のボタンで「みんなで共有するデータ」を作成してください。作成すると、この設定を反映したファイルが自動でダウンロードされます。</p>
+      <button class="btn primary block" id="createSharedBtn" style="font-size:15px; padding:14px;" disabled="">作成中…</button>
+    </div>
+    <div class="panel">
+      <h2>この後の流れ（あなただけの作業です）</h2>
+      <div class="memberList">
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">① 共有データを作成</div><div class="meta">ボタンを押すと、共有IDを埋め込んだファイルが自動でダウンロードされます。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">② GitHubのリポジトリに上書きアップロード</div><div class="meta">ダウンロードされたファイルを index.html という名前のまま、GitHubの「Add file」→「Upload files」で上書きアップロードしてください。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">③ この画面を再読み込み</div><div class="meta">数分待ってからこのURLをもう一度開けば、以後は誰がこのURLを開いても同じメンバー一覧・試合表がそのまま共有されます。</div></div></div>
+      </div>
+    </div>
+  </main>
 
 <div class="toast" id="toast"></div>
 
@@ -186,7 +199,7 @@
    SYNC_ID is baked into the file itself once the organizer completes the
    one-time setup step below, so redistributing that single file is all
    that's needed - nothing to host, nothing to log into. */
-let SYNC_ID = null; // <-- set automatically by the one-time setup step
+let SYNC_ID = "019fea33-ce1b-7712-8f37-d6b33395f879"; // <-- set automatically by the one-time setup step
 const SYNC_BASE = 'https://jsonblob.com/api/jsonBlob';
 
 function defaultState(){
@@ -790,5 +803,6 @@ async function pollUpdates(){
   startPolling();
 })();
 </script>
-</body>
-</html>
+
+
+</body></html>
