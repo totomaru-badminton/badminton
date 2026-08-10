@@ -123,14 +123,19 @@
   .statusPill.left{background:#FBEAE6; color:var(--coral-dark);}
 
   .roundCard{
-    border:1.5px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:12px; background:#fbfcfa;
+    border:1.5px solid var(--line); border-radius:var(--radius); padding:10px 12px; margin-bottom:8px; background:#fbfcfa;
   }
-  .roundCard .roundHead{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;}
+  .roundCard .roundHead{display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;}
   .roundCard .roundHead .num{font-family:'Oswald'; font-size:13px; font-weight:700; color:var(--court-green-dark); letter-spacing:0.05em;}
-  .courtsWrap{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px;}
-  .courtLabel{font-size:11px; font-weight:700; color:var(--ink-soft); margin-bottom:4px; letter-spacing:0.04em;}
-  .sittingWrap{margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); font-size:12.5px; color:var(--ink-soft);}
+  .matchList{display:flex; flex-direction:column; gap:5px;}
+  .matchRow{display:flex; align-items:center; gap:8px; padding:7px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; font-size:13px;}
+  .matchRow input{width:16px; height:16px; flex:0 0 auto; accent-color:var(--court-green);}
+  .matchCourt{font-size:10.5px; color:var(--ink-soft); min-width:48px; font-weight:700;}
+  .matchNames{font-weight:700; color:var(--ink); line-height:1.35; flex:1;}
+  .matchVs{color:var(--ink-soft); font-weight:500; padding:0 4px;}
+  .sittingWrap{margin-top:6px; padding-top:6px; border-top:1px dashed var(--line); font-size:11.5px; color:var(--ink-soft);}
   .sittingWrap b{color:var(--ink);}
+  .cancelSelectedWrap{display:flex; justify-content:flex-end; margin:0 0 10px;}
 
   table.stats{width:100%; border-collapse:collapse; font-size:13px;}
   table.stats th, table.stats td{text-align:left; padding:8px 6px; border-bottom:1px solid var(--line);}
@@ -559,7 +564,7 @@ function renderMatchTab(){
     </div>
     ${!canGenerate ? `<div class="panel"><p class="sub" style="margin:0;">試合を作るには最低4人の参加者が必要です。「本日の参加者」タブで確認してください。</p></div>` : ''}
 
-    ${s.rounds.length>0 ? `<button class="btn ghost block" id="undoRoundBtn" style="margin-bottom:14px;">直前の試合を取り消す</button>` : ''}
+    ${s.rounds.length>0 ? `<div class="cancelSelectedWrap"><button class="btn ghost" id="cancelSelectedMatchBtn">選択した試合を取り消す</button></div>` : ''}
 
     ${rounds.length===0 ? `<div class="panel"><div class="empty"><div class="icon">🏸</div>まだ試合が作成されていません。<br>上の「次の試合を作成」から始めましょう。</div></div>` :
       rounds.map(r=>renderRoundCard(r, s)).join('')}
@@ -580,51 +585,59 @@ function renderMatchTab(){
   `;
 }
 
-function courtSVG(names){
-  // names: [teamA1, teamA2, teamB1, teamB2]
-  const short = n => n.length>6 ? n.slice(0,6)+'…' : n;
+function renderMatchRow(roundIndex, matchIndex, match, session){
+  const nameOf = id => (session.participants[id] && session.participants[id].name) || '?';
+  const teamA = match[0].map(nameOf).map(escapeHtml).join('・');
+  const teamB = match[1].map(nameOf).map(escapeHtml).join('・');
+  const key = `${roundIndex}:${matchIndex}`;
   return `
-  <svg viewBox="0 0 240 130" width="100%" height="auto" style="display:block;">
-    <rect x="2" y="2" width="236" height="126" rx="8" fill="var(--court-green-light)"/>
-    <rect x="2" y="2" width="236" height="126" rx="8" fill="none" stroke="var(--court-line)" stroke-width="2"/>
-    <line x1="120" y1="6" x2="120" y2="124" stroke="var(--court-line)" stroke-width="2.5"/>
-    <line x1="60" y1="6" x2="60" y2="124" stroke="var(--court-line)" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>
-    <line x1="180" y1="6" x2="180" y2="124" stroke="var(--court-line)" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>
-    <circle cx="45" cy="35" r="14" fill="#fff"/>
-    <text x="45" y="40" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[0])[0]}</text>
-    <text x="45" y="60" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[0])}</text>
-
-    <circle cx="45" cy="95" r="14" fill="#fff"/>
-    <text x="45" y="100" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[1])[0]}</text>
-    <text x="45" y="118" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[1])}</text>
-
-    <circle cx="195" cy="35" r="14" fill="var(--gold)"/>
-    <text x="195" y="40" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[2])[0]}</text>
-    <text x="195" y="60" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[2])}</text>
-
-    <circle cx="195" cy="95" r="14" fill="var(--gold)"/>
-    <text x="195" y="100" font-size="11" font-weight="700" text-anchor="middle" fill="var(--court-green-dark)" font-family="Zen Kaku Gothic New">${short(names[3])[0]}</text>
-    <text x="195" y="118" font-size="10" text-anchor="middle" fill="#fff" font-weight="600">${short(names[3])}</text>
-  </svg>`;
+    <label class="matchRow">
+      <input type="radio" name="cancelMatch" value="${key}" aria-label="第${roundIndex}試合 コート${matchIndex+1}を選択">
+      <span class="matchCourt">コート ${matchIndex+1}</span>
+      <span class="matchNames">${teamA}<span class="matchVs">vs</span>${teamB}</span>
+    </label>`;
 }
 
 function renderRoundCard(round, session){
+  const matchesHtml = round.matches.length
+    ? round.matches.map((m,i)=>renderMatchRow(round.index, i, m, session)).join('')
+    : `<div class="sub" style="padding:4px 0;">この試合は取り消されました。</div>`;
   const nameOf = id => (session.participants[id] && session.participants[id].name) || '?';
   return `
     <div class="roundCard">
       <div class="roundHead">
         <span class="num">第 ${round.index} 試合</span>
       </div>
-      <div class="courtsWrap">
-        ${round.matches.map((m,i)=>`
-          <div>
-            <div class="courtLabel">コート ${i+1}</div>
-            ${courtSVG([nameOf(m[0][0]), nameOf(m[0][1]), nameOf(m[1][0]), nameOf(m[1][1])])}
-          </div>`).join('')}
-      </div>
+      <div class="matchList">${matchesHtml}</div>
       ${round.sitting.length>0 ? `<div class="sittingWrap">休憩：<b>${round.sitting.map(nameOf).map(escapeHtml).join('、')}</b></div>` : ''}
     </div>
   `;
+}
+
+function recomputeSessionStats(){
+  const s = state.session;
+  if(!s) return;
+  s.partnerCounts = {};
+  Object.values(s.participants).forEach(p=>{ p.gamesPlayed=0; p.restStreak=0; });
+
+  s.rounds.forEach(round=>{
+    const playingIds = new Set();
+    round.matches.forEach(m=>{
+      const k1=pairKey(m[0][0],m[0][1]), k2=pairKey(m[1][0],m[1][1]);
+      s.partnerCounts[k1]=(s.partnerCounts[k1]||0)+1;
+      s.partnerCounts[k2]=(s.partnerCounts[k2]||0)+1;
+      [...m[0],...m[1]].forEach(id=>{
+        playingIds.add(id);
+        if(s.participants[id]){
+          s.participants[id].gamesPlayed += 1;
+          s.participants[id].restStreak = 0;
+        }
+      });
+    });
+    Object.values(s.participants).forEach(p=>{
+      if(!playingIds.has(p.id)) p.restStreak += 1;
+    });
+  });
 }
 
 function escapeHtml(str){
@@ -747,25 +760,32 @@ function bindEvents(){
     };
   }
 
-  const undoBtn = document.getElementById('undoRoundBtn');
-  if(undoBtn){
-    undoBtn.onclick = async ()=>{
-      if(!confirm('直前の試合を取り消しますか？試合数のカウントも元に戻ります。')) return;
+  const cancelSelectedBtn = document.getElementById('cancelSelectedMatchBtn');
+  if(cancelSelectedBtn){
+    cancelSelectedBtn.onclick = async ()=>{
+      const selected = document.querySelector('input[name="cancelMatch"]:checked');
+      if(!selected){
+        showToast('取り消す試合を選択してください');
+        return;
+      }
+      const [roundIndexStr, matchIndexStr] = selected.value.split(':');
+      const roundIndex = parseInt(roundIndexStr,10);
+      const matchIndex = parseInt(matchIndexStr,10);
       const s = state.session;
-      const last = s.rounds.pop();
-      if(!last) return;
-      last.matches.forEach(m=>{
-        const k1 = pairKey(m[0][0], m[0][1]), k2 = pairKey(m[1][0], m[1][1]);
-        if(s.partnerCounts[k1]) s.partnerCounts[k1]--;
-        if(s.partnerCounts[k2]) s.partnerCounts[k2]--;
-        [...m[0], ...m[1]].forEach(id=>{
-          if(s.participants[id]) s.participants[id].gamesPlayed = Math.max(0, s.participants[id].gamesPlayed-1);
-        });
-      });
-      last.sitting.forEach(id=>{
-        if(s.participants[id]) s.participants[id].restStreak = Math.max(0, s.participants[id].restStreak-1);
-      });
-      await persist('直前の試合を取り消しました');
+      const round = s.rounds.find(r=>r.index===roundIndex);
+      if(!round || !round.matches[matchIndex]) return;
+      const m = round.matches[matchIndex];
+      const nameOf = id => (s.participants[id] && s.participants[id].name) || '?';
+      const matchName = `${m[0].map(nameOf).join('・')} vs ${m[1].map(nameOf).join('・')}`;
+      if(!confirm(`「${matchName}」を取り消しますか？\n試合数のカウントも更新されます。`)) return;
+
+      round.matches.splice(matchIndex,1);
+      if(round.matches.length===0){
+        s.rounds = s.rounds.filter(r=>r!==round);
+      }
+      s.rounds.forEach((r,i)=>{ r.index=i+1; });
+      recomputeSessionStats();
+      await persist('選択した試合を取り消しました');
     };
   }
 }
