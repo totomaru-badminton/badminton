@@ -166,6 +166,16 @@
   .toast.show{opacity:1; transform:translateX(-50%) translateY(-4px);}
 
   .inlineForm{display:flex; gap:8px; margin-top:12px;}
+  .memberActions{display:flex;gap:5px;align-items:center;flex-shrink:0;}
+  .sortHint{font-size:11.5px;color:var(--ink-soft);margin-top:8px;}
+  .matchEditGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0;}
+  .matchEditGrid label{font-size:11px;color:var(--ink-soft);font-weight:700;}
+  .matchEditGrid select{margin-top:4px;}
+  .modalBack{position:fixed;inset:0;background:rgba(20,35,31,.45);z-index:40;display:flex;align-items:center;justify-content:center;padding:14px;}
+  .modal{background:#fff;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.2);width:min(520px,100%);padding:18px;}
+  .modal h3{margin:0 0 4px;font-size:16px;color:var(--court-green-dark);}
+  .modal .sub{margin-bottom:10px;}
+  .modalActions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}
   .footNote{font-size:11.5px; color:var(--ink-soft); text-align:center; margin-top:6px; line-height:1.6;}
 </style>
 </head>
@@ -223,6 +233,7 @@ function defaultState(){
 
 function normalizeState(raw){
   const st = raw || defaultState();
+  if(!Array.isArray(st.members)) st.members = [];
   if(st.session){
     if(!st.session.partnerCounts) st.session.partnerCounts = {};
     if(!Array.isArray(st.session.rounds)) st.session.rounds = [];
@@ -369,27 +380,53 @@ function activeParticipants(){
   return Object.values(state.session.participants).filter(p=>p.status==='active');
 }
 
+function getActiveMatchRecords(){
+  const s=state.session;
+  if(!s) return [];
+  const records=[];
+  (s.activeMatches||[]).forEach(key=>{
+    const [roundNo, matchNo]=String(key).split(':').map(Number);
+    const round=s.rounds.find(r=>r.index===roundNo);
+    if(!round || !round.matches[matchNo]) return;
+    const courtNo=(round.courtNumbers&&round.courtNumbers[matchNo]) || (matchNo+1);
+    records.push({key,round,matchNo,courtNo,match:round.matches[matchNo]});
+  });
+  return records;
+}
+
 function generateRound(){
   const s = state.session;
-  const active = activeParticipants();
-  const maxCourts = Math.floor(active.length/4);
-  const courts = Math.min(state.courtCount, maxCourts);
-  if(courts<1) return {error:'4人以上の参加者が必要です。'};
-  const numPlaying = courts*4;
+  const allActive = activeParticipants();
+  if(allActive.length<4) return {error:'4人以上の参加者が必要です。'};
 
-  // 途中参加者を特別扱いせず、「現在参加している人」の出場回数を基準に公平化。
-  // 出場回数が少ない人を優先し、同数なら休憩が長い人、直前出場者は少し後回し。
+  // 実施中の試合に出ている人とコートを除外し、
+  // 「空いたコート」だけを対象に、その時点の最新状況で次の4人を決める。
+  const activeRecords=getActiveMatchRecords();
+  const occupiedCourts=new Set(activeRecords.map(x=>x.courtNo));
+  const availableCourts=[];
+  for(let c=1;c<=state.courtCount;c++) if(!occupiedCourts.has(c)) availableCourts.push(c);
+  if(availableCourts.length===0) return {error:'現在、すべてのコートで試合中です。コートが空いてから次の試合を作成してください。'};
+
+  const playingNow=new Set(activeRecords.flatMap(x=>x.match.flat(2)));
+  const waiting=allActive.filter(p=>!playingNow.has(p.id));
+  if(waiting.length<4) return {error:'現在試合中の人を除くと、次の試合に入れる参加者が4人未満です。'};
+
+  const slots=Math.min(availableCourts.length,Math.floor(waiting.length/4));
+  const numPlaying=slots*4;
+
+  // 出場回数が少ない人を優先し、同数なら休憩が長い人を優先。
+  // 現在試合中の人は候補から完全に除外する。
+  const minGames = Math.min(...waiting.map(x=>x.gamesPlayed));
   const scorePlayer = p => {
-    const minGames = Math.min(...active.map(x=>x.gamesPlayed));
-    let score = (p.gamesPlayed-minGames)*100;
-    score -= p.restStreak*10;
-    if(p.restStreak===0 && s.rounds.length>0) score += 25;
-    if(p.restStreak>=2) score -= 12;
+    let score=(p.gamesPlayed-minGames)*100;
+    score-=p.restStreak*10;
+    if(p.restStreak===0 && s.rounds.length>0) score+=25;
+    if(p.restStreak>=2) score-=12;
     return score;
   };
-  const playing = [...active].sort((a,b)=>scorePlayer(a)-scorePlayer(b) || a.name.localeCompare(b.name,'ja')).slice(0,numPlaying);
+  const playing=[...waiting].sort((a,b)=>scorePlayer(a)-scorePlayer(b) || a.name.localeCompare(b.name,'ja')).slice(0,numPlaying);
   const playingSet = new Set(playing.map(p=>p.id));
-  const sitting = active.filter(p=>!playingSet.has(p.id));
+  const sitting = allActive.filter(p=>!playingSet.has(p.id) && !playingNow.has(p.id));
 
   let best=null, bestScore=Infinity;
   for(let attempt=0; attempt<160; attempt++){
@@ -410,7 +447,7 @@ function generateRound(){
     });
     if(totalScore<bestScore){bestScore=totalScore;best=matches;}
   }
-  return {courts,playing,sitting,matches:best};
+  return {courts:slots,playing,sitting,matches:best,courtNumbers:availableCourts.slice(0,slots)};
 }
 
 function commitRound(result){
@@ -418,7 +455,7 @@ function commitRound(result){
   if(!Array.isArray(s.activeMatches)) s.activeMatches=[];
   const round = { index: s.rounds.length+1, matches: result.matches.map(m=>[
       [m[0][0].id,m[0][1].id], [m[1][0].id,m[1][1].id]
-    ]), sitting: result.sitting.map(p=>p.id) };
+    ]), courtNumbers: result.courtNumbers || result.matches.map((_,i)=>i+1), sitting: result.sitting.map(p=>p.id) };
   s.rounds.push(round);
 
   result.matches.forEach(m=>{
@@ -468,7 +505,7 @@ function render(){
 }
 
 function renderMembersTab(){
-  const list = state.members.slice().sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+  const list = state.members.slice();
   return `
     <div class="panel">
       <h2>メンバーを登録</h2>
@@ -480,12 +517,18 @@ function renderMembersTab(){
     </div>
     <div class="panel">
       <h2>登録メンバー一覧（${list.length}人）</h2>
+      <p class="sortHint">表示順を変更できます。↕で並び替え、✎で名前を訂正します。</p>
       ${list.length===0 ? `<div class="empty"><div class="icon">🏸</div>まだメンバーが登録されていません。<br>上のフォームから追加しましょう。</div>` :
       `<div class="memberList">
-        ${list.map(m=>`
+        ${list.map((m,i)=>`
           <div class="memberRow">
-            <span class="name">${escapeHtml(m.name)}</span>
-            <button class="btn danger sm" data-action="deleteMember" data-id="${m.id}">削除</button>
+            <span class="name">${i+1}. ${escapeHtml(m.name)}</span>
+            <div class="memberActions">
+              <button class="btn ghost sm" data-action="moveMemberUp" data-id="${m.id}" ${i===0?'disabled':''}>↑</button>
+              <button class="btn ghost sm" data-action="moveMemberDown" data-id="${m.id}" ${i===list.length-1?'disabled':''}>↓</button>
+              <button class="btn ghost sm" data-action="editMember" data-id="${m.id}">✎</button>
+              <button class="btn danger sm" data-action="deleteMember" data-id="${m.id}">削除</button>
+            </div>
           </div>`).join('')}
       </div>`}
     </div>
@@ -497,7 +540,7 @@ function renderTodayTab(){
     if(state.members.length===0){
       return `<div class="panel"><div class="empty"><div class="icon">👥</div>先に「メンバー管理」タブでメンバーを登録してください。</div></div>`;
     }
-    const sorted = state.members.slice().sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+    const sorted = state.members.slice();
     return `
       <div class="panel">
         <h2>本日の参加者を選択</h2>
@@ -521,7 +564,8 @@ function renderTodayTab(){
     `;
   }
 
-  const parts = Object.values(state.session.participants).sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+  const memberOrder = new Map(state.members.map((m,i)=>[m.id,i]));
+  const parts = Object.values(state.session.participants).sort((a,b)=>(memberOrder.get(a.id) ?? 999999)-(memberOrder.get(b.id) ?? 999999) || a.name.localeCompare(b.name,'ja'));
   const activeIds = new Set(parts.filter(p=>p.status==='active').map(p=>p.id));
   const notYetIn = state.members.filter(m=>!state.session.participants[m.id]);
 
@@ -574,18 +618,22 @@ function renderMatchTab(){
     return `<div class="panel"><div class="empty"><div class="icon">📋</div>まだ本日の練習が開始されていません。<br>「本日の参加者」タブから開始してください。</div></div>`;
   }
   const s=state.session, active=activeParticipants();
-  const canGenerate=Math.floor(active.length/4)>=1;
+  const activeRecords=getActiveMatchRecords();
+  const occupiedCourts=new Set(activeRecords.map(x=>x.courtNo));
+  const availableCourtCount=Math.max(0,state.courtCount-occupiedCourts.size);
+  const waitingCount=active.filter(p=>!activeRecords.some(x=>x.match.flat(2).includes(p.id))).length;
+  const canGenerate=availableCourtCount>0 && Math.floor(waitingCount/4)>=1;
   const rounds=s.rounds.slice().reverse();
   const stats=Object.values(s.participants).sort((a,b)=>a.gamesPlayed-b.gamesPlayed || a.name.localeCompare(b.name,'ja'));
   return `
     <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
       <div><h2 style="margin-bottom:2px;">試合表</h2><p class="sub" style="margin:0;">現在の参加者：${active.length}人 ／ 使用コート：${Math.min(state.courtCount,Math.floor(active.length/4)||state.courtCount)}面</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn primary" id="generateRoundBtn" ${canGenerate?'':'disabled'}>次の試合を作成</button>
+        <button class="btn primary" id="generateRoundBtn" ${canGenerate?'':'disabled'}>空いたコートの次の試合を作成</button>
         <button class="btn ghost" id="newDayBtn">🆕 新しい日を開始</button>
       </div>
     </div>
-    ${!canGenerate?`<div class="panel"><p class="sub" style="margin:0;">試合を作るには最低4人の参加者が必要です。「本日の参加者」タブで確認してください。</p></div>`:''}
+    ${!canGenerate?`<div class="panel"><p class="sub" style="margin:0;">${availableCourtCount===0?'現在すべてのコートで試合中です。試合が終わってコートが空いてから、次の試合を作成してください。':waitingCount<4?'現在試合中の人を除くと、次の試合に入れる参加者が4人未満です。':'次の試合を作成できます。'}</p></div>`:''}
     ${rounds.length>0?`<div class="panel" style="padding:10px 14px;"><p class="sub" style="margin:0;">取り消したい試合を選択してください。</p><button class="btn ghost" id="cancelSelectedBtn" style="margin-top:8px;">選択した試合を取り消す</button></div>`:''}
     ${rounds.length===0?`<div class="panel"><div class="empty"><div class="icon">🏸</div>まだ試合が作成されていません。<br>上の「次の試合を作成」から始めましょう。</div></div>`:rounds.map(r=>renderRoundCard(r,s)).join('')}
     <div class="panel"><h2>参加者ごとの試合数</h2><table class="stats"><thead><tr><th>名前</th><th>試合数</th><th>状態</th></tr></thead><tbody>
@@ -602,16 +650,63 @@ function renderRoundCard(round,session){
       const key=`${round.index}:${i}`;
       const isActive=activeSet.has(key);
       return `<div class="compactMatch ${isActive?'activeMatch':''}">
-        <span class="courtLabel">コート${i+1}</span>
+        <span class="courtLabel">コート${(round.courtNumbers&&round.courtNumbers[i]) || (i+1)}</span>
         <span class="team">${escapeHtml(nameOf(m[0][0]))}・${escapeHtml(nameOf(m[0][1]))}</span>
         <span class="vs">vs</span>
         <span class="team">${escapeHtml(nameOf(m[1][0]))}・${escapeHtml(nameOf(m[1][1]))}</span>
         ${isActive?'<span class="activeBadge">● 実施中</span>':''}
         <button class="activeToggle ${isActive?'on':''}" data-action="toggleActiveMatch" data-round="${round.index}" data-match="${i}">${isActive?'実施中を解除':'実施中にする'}</button>
+        <button class="btn ghost sm" data-action="editMatch" data-round="${round.index}" data-match="${i}">✎ 訂正</button>
       </div>`;
     }).join('')}</div>
     ${round.sitting.length>0?`<div class="sittingWrap">休憩：<b>${round.sitting.map(nameOf).map(escapeHtml).join('、')}</b></div>`:''}
   </div>`;
+}
+
+function renderMatchEditModal(roundIndex, matchIndex){
+  const s=state.session, round=s.rounds.find(r=>r.index===roundIndex);
+  if(!round || !round.matches[matchIndex]) return '';
+  const match=round.matches[matchIndex];
+  const playerIds=Object.values(s.participants).filter(p=>p.status==='active' || match.flat(2).includes(p.id));
+  const optionHtml=selected=>playerIds.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
+  return `<div class="modalBack" id="matchEditModal">
+    <div class="modal">
+      <h3>第${roundIndex}試合・コート${matchIndex+1}を訂正</h3>
+      <p class="sub">4人の組み合わせを変更できます。保存すると、出場回数とパートナー回数も自動で再計算します。</p>
+      <div class="matchEditGrid">
+        <label>チームA・1人目<select id="editP0">${optionHtml(match[0][0])}</select></label>
+        <label>チームA・2人目<select id="editP1">${optionHtml(match[0][1])}</select></label>
+        <label>チームB・1人目<select id="editP2">${optionHtml(match[1][0])}</select></label>
+        <label>チームB・2人目<select id="editP3">${optionHtml(match[1][1])}</select></label>
+      </div>
+      <div class="modalActions">
+        <button class="btn ghost" id="cancelMatchEdit">キャンセル</button>
+        <button class="btn primary" id="saveMatchEdit">訂正を保存</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function recalculateSessionStats(){
+  const s=state.session;
+  if(!s) return;
+  s.partnerCounts={};
+  Object.values(s.participants).forEach(p=>{p.gamesPlayed=0;p.restStreak=0;});
+  s.rounds.forEach(round=>{
+    round.matches.forEach(m=>{
+      const k1=pairKey(m[0][0],m[0][1]), k2=pairKey(m[1][0],m[1][1]);
+      s.partnerCounts[k1]=(s.partnerCounts[k1]||0)+1;
+      s.partnerCounts[k2]=(s.partnerCounts[k2]||0)+1;
+      [...m[0],...m[1]].forEach(id=>{if(s.participants[id]) s.participants[id].gamesPlayed++;});
+    });
+  });
+  // 試合履歴を時系列にたどって連続休憩数を再構築。退出者は休憩数を更新しない。
+  s.rounds.forEach(round=>{
+    const playing=new Set(round.matches.flat(2));
+    Object.values(s.participants).forEach(p=>{
+      if(p.status==='active') p.restStreak=playing.has(p.id)?0:p.restStreak+1;
+    });
+  });
 }
 
 function escapeHtml(str){
@@ -643,6 +738,36 @@ function bindEvents(){
       if(!confirm('このメンバーを削除しますか？')) return;
       state.members = state.members.filter(m=>m.id!==id);
       await persist('メンバーを削除しました');
+    };
+  });
+
+  document.querySelectorAll('[data-action="moveMemberUp"]').forEach(btn=>{
+    btn.onclick=async()=>{
+      const i=state.members.findIndex(m=>m.id===btn.dataset.id);
+      if(i<=0) return;
+      [state.members[i-1],state.members[i]]=[state.members[i],state.members[i-1]];
+      await persist('表示順を変更しました');
+    };
+  });
+  document.querySelectorAll('[data-action="moveMemberDown"]').forEach(btn=>{
+    btn.onclick=async()=>{
+      const i=state.members.findIndex(m=>m.id===btn.dataset.id);
+      if(i<0 || i>=state.members.length-1) return;
+      [state.members[i],state.members[i+1]]=[state.members[i+1],state.members[i]];
+      await persist('表示順を変更しました');
+    };
+  });
+  document.querySelectorAll('[data-action="editMember"]').forEach(btn=>{
+    btn.onclick=async()=>{
+      const m=state.members.find(x=>x.id===btn.dataset.id);
+      if(!m) return;
+      const name=prompt('登録者名を訂正してください。',m.name);
+      if(name===null) return;
+      const trimmed=name.trim();
+      if(!trimmed){showToast('名前を入力してください');return;}
+      const oldName=m.name; m.name=trimmed;
+      if(state.session?.participants[m.id]) state.session.participants[m.id].name=trimmed;
+      await persist(`${oldName}さんの名前を訂正しました`);
     };
   });
 
@@ -752,6 +877,35 @@ function bindEvents(){
       if(i>=0) state.session.activeMatches.splice(i,1);
       else state.session.activeMatches.push(key);
       await persist(i>=0?'実施中を解除しました':'実施中にしました');
+    };
+  });
+
+  document.querySelectorAll('[data-action="editMatch"]').forEach(btn=>{
+    btn.onclick=()=>{
+      const existing=document.getElementById('matchEditModal');
+      if(existing) existing.remove();
+      document.body.insertAdjacentHTML('beforeend',renderMatchEditModal(Number(btn.dataset.round),Number(btn.dataset.match)));
+      const modal=document.getElementById('matchEditModal');
+      const close=()=>modal&&modal.remove();
+      document.getElementById('cancelMatchEdit').onclick=close;
+      document.getElementById('saveMatchEdit').onclick=async()=>{
+        const ids=['editP0','editP1','editP2','editP3'].map(id=>document.getElementById(id).value);
+        if(new Set(ids).size!==4){showToast('同じ人を複数選択することはできません');return;}
+        const ss=state.session, roundNo=Number(btn.dataset.round), matchNo=Number(btn.dataset.match);
+        const alreadyPlaying=new Set(ss.rounds.find(x=>x.index===roundNo).matches.flat().flat());
+        const currentIds=new Set(ss.rounds.find(x=>x.index===roundNo).matches[matchNo].flat());
+        const conflict=ids.some(id=>alreadyPlaying.has(id) && !currentIds.has(id));
+        if(conflict){showToast('同じ試合の別コートに出場している人は選択できません');return;}
+        const r=ss.rounds.find(x=>x.index===roundNo);
+        if(!r) return;
+        const oldKey1=pairKey(r.matches[Number(btn.dataset.match)][0][0],r.matches[Number(btn.dataset.match)][0][1]);
+        const oldKey2=pairKey(r.matches[Number(btn.dataset.match)][1][0],r.matches[Number(btn.dataset.match)][1][1]);
+        r.matches[Number(btn.dataset.match)]=[[ids[0],ids[1]],[ids[2],ids[3]]];
+        // 試合の訂正後、履歴全体から出場回数・パートナー回数を再計算して整合性を保証
+        recalculateSessionStats();
+        close();
+        await persist('試合を訂正しました');
+      };
     };
   });
 
