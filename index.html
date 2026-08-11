@@ -503,6 +503,8 @@ function commitMatch(m){
 }
 
 /* ---------- rendering ---------- */
+let loadFailed = false;
+
 function render(){
   const nav = document.querySelector('nav.tabs');
   const main = document.getElementById('main');
@@ -513,6 +515,15 @@ function render(){
     bindSetupEvents();
     return;
   }
+
+  if(loadFailed){
+    nav.style.display='none';
+    main.innerHTML = renderLoadFailedScreen();
+    const retryBtn = document.getElementById('retryLoadBtn');
+    if(retryBtn) retryBtn.onclick = ()=>init();
+    return;
+  }
+
   nav.style.display='flex';
 
   document.querySelectorAll('nav.tabs button').forEach(b=>{
@@ -531,6 +542,14 @@ function render(){
   else main.innerHTML = renderMatchTab();
 
   bindEvents();
+}
+
+function renderLoadFailedScreen(){
+  return `<div class="panel"><div class="empty">
+    <div class="icon">📡</div>
+    データの読み込みに失敗しました。<br>通信環境をご確認のうえ、もう一度お試しください。<br><br>
+    <button class="btn primary" id="retryLoadBtn">🔄 再読み込み</button>
+  </div></div>`;
 }
 
 function renderMembersTab(){
@@ -906,21 +925,26 @@ async function pollUpdates(){
 }
 
 /* ---------- init ---------- */
-(async function init(){
+async function init(){
   if(!SYNC_ID){
     render();
     return;
   }
+  loadFailed = false;
   try{
     state = normalizeState(await loadState());
+    lastSavedJSON = JSON.stringify(state);
+    render();
+    startPolling();
   }catch(e){
-    state = defaultState();
-    showToast('データの読み込みに失敗しました。通信環境をご確認ください。');
+    // 読み込みに失敗した場合、空のデータをその場で「現在のデータ」として
+    // 確定させない。ここで空データを採用すると、そのまま何か操作した際に
+    // 空のデータがサーバーへ保存され、本当にメンバーが消えてしまうため。
+    loadFailed = true;
+    render();
   }
-  lastSavedJSON = JSON.stringify(state);
-  render();
-  startPolling();
-})();
+}
+init();
 </script>
 
 
