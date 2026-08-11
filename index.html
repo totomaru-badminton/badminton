@@ -209,18 +209,21 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 <script>
 /* ---------- storage helpers ----------
-   This app is designed to run as a plain, standalone HTML file - opened
-   locally, emailed, or sent over LINE - with NO Claude account and NO
-   web hosting required. Shared data (members / today's matches) is kept
-   in a free, keyless JSON storage service (jsonblob.com) so every person
-   who opens their own copy of this exact file sees the same live data.
-   SYNC_ID is baked into the file itself once the organizer completes the
-   one-time setup step below, so redistributing that single file is all
-   that's needed - nothing to host, nothing to log into. */
-let SYNC_ID = "019fea33-ce1b-7712-8f37-d6b33395f879"; // <-- set automatically by the one-time setup step
-const SYNC_BASE = 'https://jsonblob.com/api/jsonBlob';
+   このアプリは、単体のHTMLファイルとして配布して使うことを想定しています
+   （Claudeアカウント不要・サーバーへのホスティング不要）。
+   みんなで共有するデータ（メンバー一覧・当日の試合表）は、Googleの無料の
+   リアルタイムデータベース（Firebase Realtime Database）に保存し、変更が
+   あった瞬間に全員の画面へ自動で配信されます（定期的に「変化ある？」と
+   聞きに行くポーリング方式ではありません）。
+   FIREBASE_CONFIGとSYNC_PATHは、運営者が一度だけ行うセットアップの際に
+   このファイル自体へ自動で書き込まれるので、以後はこのファイル1つを
+   配布するだけで済みます。 */
+let FIREBASE_CONFIG = {"apiKey":"AIzaSyC2AZtc3k_U5F9IRTP_qkVXSq2zhMrMeSU","authDomain":"totomaru-73f3a.firebaseapp.com","databaseURL":"https://totomaru-73f3a-default-rtdb.firebaseio.com","projectId":"totomaru-73f3a","storageBucket":"totomaru-73f3a.firebasestorage.app","messagingSenderId":"296993034955","appId":"1:296993034955:web:edead935b834be7649c14e","measurementId":"G-ST3E5ZW4J9"};
+let SYNC_PATH = "totomaru/fpqdjd640mvyr2";
 
 function defaultState(){
   return { members: [], courtCount: 2, session: null };
@@ -257,113 +260,113 @@ function normalizeState(raw){
   return st;
 }
 
-// タイムアウト付きfetch。応答がない通信を長く待ちすぎないようにする一方、
-// 瞬間的な不通だけでは失敗と判断しないための土台。
-async function fetchWithTimeout(url, options={}, timeoutMs=7000){
-  const controller = new AbortController();
-  const timer = setTimeout(()=>controller.abort(), timeoutMs);
-  try{
-    return await fetch(url, {...options, signal:controller.signal});
-  } finally {
-    clearTimeout(timer);
-  }
-}
+let dbRef = null; // Firebase Realtime Databaseの参照先（購読中の場所）
 
-// 共有ストレージ（jsonblob）は無料枠だと1分あたりのアクセス回数に上限があり、
-// 同時に開いている端末が多いと 429（アクセス過多）になることがある。
-// その場合は通常の通信エラーより長めに待ってから再試行する。
-function retryDelay(attempt, isRateLimited){
-  return isRateLimited ? attempt*2500 : attempt*500;
-}
+// Firebaseに接続し、以後はサーバー側からのプッシュでリアルタイムに同期する。
+// 呼び出し時点の最新データがまず届き、その後は誰かが変更するたびに自動で届く。
+function connectFirebase(){
+  if(!FIREBASE_CONFIG || !SYNC_PATH) return;
+  if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+  if(dbRef) dbRef.off(); // 再接続時に購読が二重になるのを防ぐ
+  dbRef = firebase.database().ref(SYNC_PATH);
 
-async function loadState(){
-  if(!SYNC_ID) return defaultState();
-  const maxAttempts = 3;
-  let lastErr;
-  for(let attempt=1; attempt<=maxAttempts; attempt++){
-    try{
-      const res = await fetchWithTimeout(`${SYNC_BASE}/${SYNC_ID}`, { headers:{'Accept':'application/json'} });
-      if(!res.ok) throw Object.assign(new Error('load failed: '+res.status), {status:res.status});
-      return normalizeState(await res.json());
-    }catch(e){
-      lastErr = e;
-      if(attempt<maxAttempts) await new Promise(r=>setTimeout(r, retryDelay(attempt, e.status===429)));
-    }
-  }
-  throw lastErr;
-}
+  const firstLoadTimer = setTimeout(()=>{
+    if(!dataLoaded){ loadFailed = true; render(); }
+  }, 10000);
 
-async function saveState(state){
-  if(!SYNC_ID) return true;
-  const maxAttempts = 3;
-  for(let attempt=1; attempt<=maxAttempts; attempt++){
-    try{
-      const res = await fetchWithTimeout(`${SYNC_BASE}/${SYNC_ID}`, {
-        method:'PUT',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(state)
-      });
-      if(!res.ok) throw Object.assign(new Error('save failed: '+res.status), {status:res.status});
-      saveErrorShown = false; // 保存できたので、次に失敗した時はまた通知してよい状態に戻す
-      return true; // 成功
-    }catch(e){
-      if(attempt===maxAttempts){
-        // 同じ不通状態が続いている間、通知を連発させない。
-        // 保存できていないデータはローカルに残り続け、自動で再送を続けるので、
-        // ここで一度通知すれば十分。
-        if(!saveErrorShown){
-          saveErrorShown = true;
-          showToast(e.status===429
-            ? 'アクセスが集中しています。データは保持したまま、自動で再送し続けます。'
-            : '保存が一時的にできていません。データは保持したまま、自動で再送し続けます。');
-        }
-        return false;
-      } else {
-        await new Promise(r=>setTimeout(r, retryDelay(attempt, e.status===429)));
-      }
-    }
-  }
-  return false;
-}
-
-async function createSharedStore(initial){
-  const res = await fetch(SYNC_BASE, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(initial)
+  dbRef.on('value', (snapshot)=>{
+    clearTimeout(firstLoadTimer);
+    loadFailed = false;
+    dataLoaded = true;
+    const fresh = normalizeState(snapshot.val());
+    const freshJSON = JSON.stringify(fresh);
+    if(freshJSON === lastSavedJSON) return; // 自分がした変更が返ってきただけ
+    state = fresh;
+    lastSavedJSON = freshJSON;
+    render();
+  }, ()=>{
+    clearTimeout(firstLoadTimer);
+    loadFailed = true;
+    render();
   });
-  if(!res.ok) throw new Error('create failed: '+res.status);
-  const loc = res.headers.get('Location') || res.headers.get('location') || '';
-  const id = loc.split('/').filter(Boolean).pop();
-  if(!id) throw new Error('no blob id returned');
-  return id;
+}
+
+async function saveState(s){
+  if(!dbRef) return true;
+  try{
+    await dbRef.set(s);
+    saveErrorShown = false; // 保存できたので、次に失敗した時はまた通知してよい状態に戻す
+    return true;
+  }catch(e){
+    // 同じ不通状態が続いている間、通知を連発させない。保存できていない
+    // データはローカルに残り続け、Firebase SDKが自動で再送を試みる。
+    if(!saveErrorShown){
+      saveErrorShown = true;
+      showToast('保存が一時的にできていません。データは保持したまま、自動で再送し続けます。');
+    }
+    return false;
+  }
+}
+
+// 初回セットアップ時のみ使用：新しい共有データの置き場所(パス)を作る
+async function createSharedStore(config, initial){
+  if(!firebase.apps.length) firebase.initializeApp(config);
+  const path = 'totomaru/' + uid() + uid(); // 第三者に推測されにくいランダムな置き場所
+  await firebase.database().ref(path).set(initial);
+  return path;
 }
 
 /* ---------- app state ---------- */
 let state = defaultState();
 let activeTab = 'members';
 let lastSavedJSON = '';
-let syncing = false;
 let saveChain = Promise.resolve();
 let saveInFlight = false;
-let pollTimer = null;
 let saveErrorShown = false; // 同じ通信不良の間、失敗通知を連発させないためのフラグ
+let loadFailed = false;
+let dataLoaded = false; // Firebaseから最初のデータを受け取るまでtrueにしない
+
+const FIREBASE_RULES_JSON = `{
+  "rules": {
+    "totomaru": {
+      "$id": {
+        ".read": true,
+        ".write": true
+      }
+    }
+  }
+}`;
 
 /* ---------- setup screen (first run, before a shared store exists) ---------- */
 function renderSetupScreen(){
   return `
     <div class="panel">
       <h2>はじめに：共有データを作成</h2>
-      <p class="sub">最初の1回だけ、下のボタンで「みんなで共有するデータ」を作成してください。作成すると、この設定を反映したファイルが自動でダウンロードされます。</p>
-      <button class="btn primary block" id="createSharedBtn" style="font-size:15px; padding:14px;">共有データを作成する</button>
+      <p class="sub">下の「① Firebaseの設定情報を取得」の手順で取得した設定情報（{ }を含むコード）を貼り付けて、ボタンを押してください。作成すると、この設定を反映したファイルが自動でダウンロードされます。</p>
+      <textarea id="firebaseConfigInput" rows="8" style="width:100%; font-family:monospace; font-size:12px; padding:10px; border:1px solid var(--line); border-radius:8px; resize:vertical;" placeholder='{
+  "apiKey": "...",
+  "authDomain": "...",
+  "databaseURL": "...",
+  "projectId": "...",
+  "storageBucket": "...",
+  "messagingSenderId": "...",
+  "appId": "..."
+}'></textarea>
+      <button class="btn primary block" id="createSharedBtn" style="font-size:15px; padding:14px; margin-top:10px;">共有データを作成する</button>
     </div>
     <div class="panel">
-      <h2>この後の流れ（あなただけの作業です）</h2>
+      <h2>① Firebaseの設定情報を取得（最初の1回だけ・約5分）</h2>
       <div class="memberList">
-        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">① 共有データを作成</div><div class="meta">ボタンを押すと、共有IDを埋め込んだファイルが自動でダウンロードされます。</div></div></div>
-        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">② GitHubのリポジトリに上書きアップロード</div><div class="meta">ダウンロードされたファイルを index.html という名前のまま、GitHubの「Add file」→「Upload files」で上書きアップロードしてください。</div></div></div>
-        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">③ この画面を再読み込み</div><div class="meta">数分待ってからこのURLをもう一度開けば、以後は誰がこのURLを開いても同じメンバー一覧・試合表がそのまま共有されます。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">1. Firebaseコンソールを開く</div><div class="meta">https://console.firebase.google.com/ にアクセスし、お持ちのGoogleアカウントでログインします。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">2. プロジェクトを作成</div><div class="meta">「プロジェクトを追加」→ 名前を入力（例：totomaru）→ Googleアナリティクスは「無効にする」でOK →「プロジェクトを作成」。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">3. Realtime Databaseを有効化</div><div class="meta">左メニュー「構築」→「Realtime Database」→「データベースを作成」→ ロケーションは初期値のままでOK →「テストモードで開始」を選んで「有効にする」。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">4. セキュリティルールを設定</div><div class="meta">「ルール」タブを開き、下の「② セキュリティルール」の内容をコピーして貼り付け、「公開」を押します。</div></div></div>
+        <div class="memberRow" style="align-items:flex-start;"><div><div class="name">5. アプリを登録して設定情報を取得</div><div class="meta">画面左上の歯車アイコン →「プロジェクトの設定」→ 下の方の「マイアプリ」→「&lt;/&gt;」（ウェブ）を選択 → ニックネームを入力して「アプリを登録」→ 表示される firebaseConfig の中身（{ }を含む部分）をすべてコピーして、上の欄に貼り付けてください。</div></div></div>
       </div>
+    </div>
+    <div class="panel">
+      <h2>② セキュリティルール（上の手順4でコピーする内容）</h2>
+      <pre style="background:var(--bg); padding:12px; border-radius:8px; font-size:12px; overflow-x:auto; white-space:pre-wrap;">${escapeHtml(FIREBASE_RULES_JSON)}</pre>
     </div>
   `;
 }
@@ -372,30 +375,46 @@ function bindSetupEvents(){
   const btn = document.getElementById('createSharedBtn');
   if(!btn) return;
   btn.onclick = async ()=>{
+    const raw = (document.getElementById('firebaseConfigInput').value || '').trim();
+    let config;
+    try{
+      config = JSON.parse(raw);
+    }catch(e){
+      showToast('設定情報の形式が正しくありません。コピーした内容をそのまま貼り付けてください。');
+      return;
+    }
+    if(!config.databaseURL){
+      showToast('databaseURLが含まれていません。Firebaseコンソールからコピーし直してください。');
+      return;
+    }
     btn.disabled = true;
     btn.textContent = '作成中…';
     try{
       const initial = defaultState();
-      const id = await createSharedStore(initial);
-      SYNC_ID = id;
+      const path = await createSharedStore(config, initial);
+      FIREBASE_CONFIG = config;
+      SYNC_PATH = path;
       state = initial;
       lastSavedJSON = JSON.stringify(state);
-      triggerDownload(buildSharedFile(id), 'badminton-scheduler-shared.html');
+      dataLoaded = true;
+      triggerDownload(buildSharedFile(config, path), 'totomaru-badminton-shared.html');
       showToast('共有データを作成しました。ダウンロードしたファイルをメンバーに送ってください。');
       activeTab = 'members';
-      startPolling();
+      connectFirebase();
       render();
     }catch(e){
-      showToast('作成に失敗しました。通信環境を確認してもう一度お試しください。');
+      showToast('作成に失敗しました。設定情報とインターネット接続を確認してもう一度お試しください。');
       btn.disabled = false;
       btn.textContent = '共有データを作成する';
     }
   };
 }
 
-function buildSharedFile(id){
+function buildSharedFile(config, path){
   const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
-  return html.replace(/let SYNC_ID = [^;]*;/, `let SYNC_ID = ${JSON.stringify(id)};`);
+  return html
+    .replace(/let FIREBASE_CONFIG = [^;]*;/, `let FIREBASE_CONFIG = ${JSON.stringify(config)};`)
+    .replace(/let SYNC_PATH = [^;]*;/, `let SYNC_PATH = ${JSON.stringify(path)};`);
 }
 
 function triggerDownload(text, filename){
@@ -405,23 +424,6 @@ function triggerDownload(text, filename){
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
-}
-
-// 共有ストレージのアクセス回数上限に達しにくいよう、
-// ・間隔を6秒→18秒に延長
-// ・端末ごとにランダムなズレを持たせて、一斉アクセスの山ができないようにする
-// ・画面を見ていない（バックグラウンドの）間は同期を止める
-function startPolling(){
-  if(pollTimer) return;
-  const jitter = Math.floor(Math.random()*5000);
-  pollTimer = setInterval(()=>{
-    if(document.hidden) return;
-    pollUpdates();
-  }, 18000 + jitter);
-
-  document.addEventListener('visibilitychange', ()=>{
-    if(!document.hidden) pollUpdates();
-  });
 }
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -533,13 +535,11 @@ function commitMatch(m){
 }
 
 /* ---------- rendering ---------- */
-let loadFailed = false;
-
 function render(){
   const nav = document.querySelector('nav.tabs');
   const main = document.getElementById('main');
 
-  if(!SYNC_ID){
+  if(!FIREBASE_CONFIG || !SYNC_PATH){
     nav.style.display='none';
     main.innerHTML = renderSetupScreen();
     bindSetupEvents();
@@ -551,6 +551,12 @@ function render(){
     main.innerHTML = renderLoadFailedScreen();
     const retryBtn = document.getElementById('retryLoadBtn');
     if(retryBtn) retryBtn.onclick = ()=>init();
+    return;
+  }
+
+  if(!dataLoaded){
+    nav.style.display='none';
+    main.innerHTML = `<div class="panel"><div class="empty"><div class="icon">🔄</div>読み込み中…</div></div>`;
     return;
   }
 
@@ -937,52 +943,15 @@ function bindEvents(){
 
 }
 
-/* ---------- live sync polling ---------- */
-async function pollUpdates(){
-  if(syncing || saveInFlight || !SYNC_ID) return;
-  syncing = true;
-  try{
-    if(JSON.stringify(state) !== lastSavedJSON){
-      // 直前の保存が失敗し、まだサーバーへ反映できていない変更が
-      // ローカルに残っている状態。サーバーの古いデータで上書きする前に、
-      // ここで自動的に保存を再試行する。
-      const ok = await saveState(state);
-      if(ok){
-        lastSavedJSON = JSON.stringify(state);
-        render(); // 「保存待ち」表示を消すため
-      }
-    } else {
-      const fresh = await loadState();
-      const freshJSON = JSON.stringify(fresh);
-      if(freshJSON !== lastSavedJSON){
-        state = fresh;
-        lastSavedJSON = freshJSON;
-        render();
-      }
-    }
-  }catch(e){ /* offline or temporary error - keep showing last known state */ }
-  syncing = false;
-}
-
 /* ---------- init ---------- */
-async function init(){
-  if(!SYNC_ID){
+function init(){
+  if(!FIREBASE_CONFIG || !SYNC_PATH){
     render();
     return;
   }
   loadFailed = false;
-  try{
-    state = normalizeState(await loadState());
-    lastSavedJSON = JSON.stringify(state);
-    render();
-    startPolling();
-  }catch(e){
-    // 読み込みに失敗した場合、空のデータをその場で「現在のデータ」として
-    // 確定させない。ここで空データを採用すると、そのまま何か操作した際に
-    // 空のデータがサーバーへ保存され、本当にメンバーが消えてしまうため。
-    loadFailed = true;
-    render();
-  }
+  render(); // データ到着前は「読み込み中…」を表示
+  connectFirebase(); // 以後はFirebaseからのプッシュでリアルタイムに同期される
 }
 init();
 </script>
