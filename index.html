@@ -286,7 +286,7 @@ async function loadState(){
 }
 
 async function saveState(state){
-  if(!SYNC_ID) return;
+  if(!SYNC_ID) return true;
   const maxAttempts = 3;
   for(let attempt=1; attempt<=maxAttempts; attempt++){
     try{
@@ -296,16 +296,18 @@ async function saveState(state){
         body: JSON.stringify(state)
       });
       if(!res.ok) throw new Error('save failed: '+res.status);
-      return; // 成功
+      return true; // 成功
     }catch(e){
       if(attempt===maxAttempts){
         showToast('保存に失敗しました。通信状態を確認してください。');
+        return false;
       } else {
         // 瞬間的な不通の可能性があるので、少し待ってすぐに再試行する
         await new Promise(r=>setTimeout(r, attempt*400));
       }
     }
   }
+  return false;
 }
 
 async function createSharedStore(initial){
@@ -414,8 +416,13 @@ async function persist(msg){
   if(msg) showToast(msg);
   render();
   saveInFlight = true;
-  saveChain = saveChain.then(()=> saveState(state)).then(()=>{
-    lastSavedJSON = JSON.stringify(state);
+  saveChain = saveChain.then(()=> saveState(state)).then((ok)=>{
+    // 保存が成功した時だけ「サーバーと一致した」とみなす。
+    // 失敗時にここでlastSavedJSONを更新してしまうと、実際には
+    // サーバーに反映されていない変更を「保存済み」と誤認し、
+    // 次の自動同期で古いサーバーのデータに上書きされてしまう
+    // （登録メンバーや試合が消えて見える不具合の原因だった）。
+    if(ok) lastSavedJSON = JSON.stringify(state);
     saveInFlight = false;
   });
   await saveChain;
@@ -879,12 +886,20 @@ async function pollUpdates(){
   if(syncing || saveInFlight || !SYNC_ID) return;
   syncing = true;
   try{
-    const fresh = await loadState();
-    const freshJSON = JSON.stringify(fresh);
-    if(freshJSON !== lastSavedJSON){
-      state = fresh;
-      lastSavedJSON = freshJSON;
-      render();
+    if(JSON.stringify(state) !== lastSavedJSON){
+      // 直前の保存が失敗し、まだサーバーへ反映できていない変更が
+      // ローカルに残っている状態。サーバーの古いデータで上書きする前に、
+      // ここで自動的に保存を再試行する。
+      const ok = await saveState(state);
+      if(ok) lastSavedJSON = JSON.stringify(state);
+    } else {
+      const fresh = await loadState();
+      const freshJSON = JSON.stringify(fresh);
+      if(freshJSON !== lastSavedJSON){
+        state = fresh;
+        lastSavedJSON = freshJSON;
+        render();
+      }
     }
   }catch(e){ /* offline or temporary error - keep showing last known state */ }
   syncing = false;
