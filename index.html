@@ -170,14 +170,6 @@
   .inlineForm{display:flex; gap:8px; margin-top:12px;}
   .memberActions{display:flex;gap:5px;align-items:center;flex-shrink:0;}
   .sortHint{font-size:11.5px;color:var(--ink-soft);margin-top:8px;}
-  .matchEditGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0;}
-  .matchEditGrid label{font-size:11px;color:var(--ink-soft);font-weight:700;}
-  .matchEditGrid select{margin-top:4px;}
-  .modalBack{position:fixed;inset:0;background:rgba(20,35,31,.45);z-index:40;display:flex;align-items:center;justify-content:center;padding:14px;}
-  .modal{background:#fff;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.2);width:min(520px,100%);padding:18px;}
-  .modal h3{margin:0 0 4px;font-size:16px;color:var(--court-green-dark);}
-  .modal .sub{margin-bottom:10px;}
-  .modalActions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}
   .footNote{font-size:11.5px; color:var(--ink-soft); text-align:center; margin-top:6px; line-height:1.6;}
 </style>
 </head>
@@ -307,6 +299,8 @@ let state = defaultState();
 let activeTab = 'members';
 let lastSavedJSON = '';
 let syncing = false;
+let saveChain = Promise.resolve();
+let saveInFlight = false;
 let pollTimer = null;
 
 /* ---------- setup screen (first run, before a shared store exists) ---------- */
@@ -384,12 +378,20 @@ function showToast(msg){
   toastTimer=setTimeout(()=>t.classList.remove('show'), 2200);
 }
 
-/* ---------- persistence wrapper ---------- */
+/* ---------- persistence wrapper ----------
+   画面は即座に更新しつつ、共有サーバーへの保存は必ず1件ずつ順番に
+   行う（同時に複数の保存が走ると、後から送ったはずのデータが先に
+   届いた古いデータに上書きされ、試合が消えたように見える不具合の
+   原因になっていたため）。 */
 async function persist(msg){
-  await saveState(state);
-  lastSavedJSON = JSON.stringify(state);
   if(msg) showToast(msg);
   render();
+  saveInFlight = true;
+  saveChain = saveChain.then(()=> saveState(state)).then(()=>{
+    lastSavedJSON = JSON.stringify(state);
+    saveInFlight = false;
+  });
+  await saveChain;
 }
 
 /* ---------- match generation logic ----------
@@ -650,51 +652,8 @@ function renderMatchRow(m, session, isRunnable){
     ${!isDone && !isActive && isRunnable?'<span class="activeBadge" style="background:var(--gold);color:var(--court-green-dark);">▶ 実施可能</span>':''}
     ${isDone?'<span class="statusPill left">終了</span>':''}
     ${!isDone?`<button class="activeToggle ${isActive?'on':''}" data-action="toggleActiveMatch" data-match="${m.no}">${isActive?'実施中を解除':'実施中にする'}</button>
-    <button class="btn gold sm" data-action="finishMatch" data-match="${m.no}">試合終了</button>
-    <button class="btn ghost sm" data-action="editMatch" data-match="${m.no}">✎ 訂正</button>`:''}
+    <button class="btn gold sm" data-action="finishMatch" data-match="${m.no}">試合終了</button>`:''}
   </div>`;
-}
-
-function renderMatchEditModal(matchNo){
-  const s=state.session, m=s.matches.find(x=>x.no===matchNo);
-  if(!m) return '';
-  const ids=[...m.pair1,...m.pair2];
-  const playerIds=Object.values(s.participants).filter(p=>p.status==='active' || ids.includes(p.id));
-  const optionHtml=selected=>playerIds.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
-  return `<div class="modalBack" id="matchEditModal">
-    <div class="modal">
-      <h3>第${matchNo}試合を訂正</h3>
-      <p class="sub">4人の組み合わせを変更できます。保存すると、出場回数とパートナー回数も自動で再計算します。</p>
-      <div class="matchEditGrid">
-        <label>チームA・1人目<select id="editP0">${optionHtml(m.pair1[0])}</select></label>
-        <label>チームA・2人目<select id="editP1">${optionHtml(m.pair1[1])}</select></label>
-        <label>チームB・1人目<select id="editP2">${optionHtml(m.pair2[0])}</select></label>
-        <label>チームB・2人目<select id="editP3">${optionHtml(m.pair2[1])}</select></label>
-      </div>
-      <div class="modalActions">
-        <button class="btn ghost" id="cancelMatchEdit">キャンセル</button>
-        <button class="btn primary" id="saveMatchEdit">訂正を保存</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-function recalculateSessionStats(){
-  const s=state.session;
-  if(!s) return;
-  s.partnerCounts={};
-  Object.values(s.participants).forEach(p=>{p.gamesPlayed=0;p.lastScheduledMatchNo=0;});
-  s.matches.forEach(m=>{
-    const k1=pairKey(m.pair1[0],m.pair1[1]), k2=pairKey(m.pair2[0],m.pair2[1]);
-    s.partnerCounts[k1]=(s.partnerCounts[k1]||0)+1;
-    s.partnerCounts[k2]=(s.partnerCounts[k2]||0)+1;
-    [...m.pair1,...m.pair2].forEach(id=>{
-      if(s.participants[id]){
-        s.participants[id].gamesPlayed++;
-        s.participants[id].lastScheduledMatchNo = m.no;
-      }
-    });
-  });
 }
 
 function escapeHtml(str){
@@ -886,35 +845,11 @@ function bindEvents(){
     };
   });
 
-  document.querySelectorAll('[data-action="editMatch"]').forEach(btn=>{
-    btn.onclick=()=>{
-      const existing=document.getElementById('matchEditModal');
-      if(existing) existing.remove();
-      document.body.insertAdjacentHTML('beforeend',renderMatchEditModal(Number(btn.dataset.match)));
-      const modal=document.getElementById('matchEditModal');
-      const close=()=>modal&&modal.remove();
-      document.getElementById('cancelMatchEdit').onclick=close;
-      document.getElementById('saveMatchEdit').onclick=async()=>{
-        const ids=['editP0','editP1','editP2','editP3'].map(id=>document.getElementById(id).value);
-        if(new Set(ids).size!==4){showToast('同じ人を複数選択することはできません');return;}
-        const ss=state.session, no=Number(btn.dataset.match);
-        const m=ss.matches.find(x=>x.no===no);
-        if(!m) return;
-        m.pair1=[ids[0],ids[1]];
-        m.pair2=[ids[2],ids[3]];
-        // 試合の訂正後、履歴全体から出場回数・パートナー回数を再計算して整合性を保証
-        recalculateSessionStats();
-        close();
-        await persist('試合を訂正しました');
-      };
-    };
-  });
-
 }
 
 /* ---------- live sync polling ---------- */
 async function pollUpdates(){
-  if(syncing || !SYNC_ID) return;
+  if(syncing || saveInFlight || !SYNC_ID) return;
   syncing = true;
   try{
     const fresh = await loadState();
