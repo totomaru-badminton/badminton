@@ -182,6 +182,7 @@
       <h1>バド割</h1>
       <p>サークルのダブルス組み合わせを、公平に自動で。</p>
     </div>
+    <span id="syncIndicator" style="display:none; margin-left:auto; font-size:11px; background:rgba(255,255,255,.18); padding:4px 9px; border-radius:20px; white-space:nowrap;">⏳ 保存待ち</span>
   </div>
   <nav class="tabs" style="display: none;">
     <button data-tab="members" class="active">メンバー管理</button>
@@ -303,10 +304,19 @@ async function saveState(state){
         body: JSON.stringify(state)
       });
       if(!res.ok) throw Object.assign(new Error('save failed: '+res.status), {status:res.status});
+      saveErrorShown = false; // 保存できたので、次に失敗した時はまた通知してよい状態に戻す
       return true; // 成功
     }catch(e){
       if(attempt===maxAttempts){
-        showToast(e.status===429?'アクセスが集中しています。しばらくして自動的に再送します。':'保存に失敗しました。通信状態を確認してください。');
+        // 同じ不通状態が続いている間、通知を連発させない。
+        // 保存できていないデータはローカルに残り続け、自動で再送を続けるので、
+        // ここで一度通知すれば十分。
+        if(!saveErrorShown){
+          saveErrorShown = true;
+          showToast(e.status===429
+            ? 'アクセスが集中しています。データは保持したまま、自動で再送し続けます。'
+            : '保存が一時的にできていません。データは保持したまま、自動で再送し続けます。');
+        }
         return false;
       } else {
         await new Promise(r=>setTimeout(r, retryDelay(attempt, e.status===429)));
@@ -337,6 +347,7 @@ let syncing = false;
 let saveChain = Promise.resolve();
 let saveInFlight = false;
 let pollTimer = null;
+let saveErrorShown = false; // 同じ通信不良の間、失敗通知を連発させないためのフラグ
 
 /* ---------- setup screen (first run, before a shared store exists) ---------- */
 function renderSetupScreen(){
@@ -442,6 +453,7 @@ async function persist(msg){
     // （登録メンバーや試合が消えて見える不具合の原因だった）。
     if(ok) lastSavedJSON = JSON.stringify(state);
     saveInFlight = false;
+    render(); // 「保存待ち」表示の状態を更新するため
   });
   await saveChain;
 }
@@ -543,6 +555,13 @@ function render(){
   }
 
   nav.style.display='flex';
+
+  const syncIndicator = document.getElementById('syncIndicator');
+  if(syncIndicator){
+    // 直近の保存が未完了（=まだサーバーに反映されていない変更がある）間だけ表示。
+    // トーストと違い常時見えるので、通知が出ていなくても状況が分かる。
+    syncIndicator.style.display = (JSON.stringify(state)!==lastSavedJSON) ? 'inline-block' : 'none';
+  }
 
   document.querySelectorAll('nav.tabs button').forEach(b=>{
     b.classList.toggle('active', b.dataset.tab===activeTab);
@@ -928,7 +947,10 @@ async function pollUpdates(){
       // ローカルに残っている状態。サーバーの古いデータで上書きする前に、
       // ここで自動的に保存を再試行する。
       const ok = await saveState(state);
-      if(ok) lastSavedJSON = JSON.stringify(state);
+      if(ok){
+        lastSavedJSON = JSON.stringify(state);
+        render(); // 「保存待ち」表示を消すため
+      }
     } else {
       const fresh = await loadState();
       const freshJSON = JSON.stringify(fresh);
