@@ -268,6 +268,13 @@ async function fetchWithTimeout(url, options={}, timeoutMs=7000){
   }
 }
 
+// 共有ストレージ（jsonblob）は無料枠だと1分あたりのアクセス回数に上限があり、
+// 同時に開いている端末が多いと 429（アクセス過多）になることがある。
+// その場合は通常の通信エラーより長めに待ってから再試行する。
+function retryDelay(attempt, isRateLimited){
+  return isRateLimited ? attempt*2500 : attempt*500;
+}
+
 async function loadState(){
   if(!SYNC_ID) return defaultState();
   const maxAttempts = 3;
@@ -275,11 +282,11 @@ async function loadState(){
   for(let attempt=1; attempt<=maxAttempts; attempt++){
     try{
       const res = await fetchWithTimeout(`${SYNC_BASE}/${SYNC_ID}`, { headers:{'Accept':'application/json'} });
-      if(!res.ok) throw new Error('load failed: '+res.status);
+      if(!res.ok) throw Object.assign(new Error('load failed: '+res.status), {status:res.status});
       return normalizeState(await res.json());
     }catch(e){
       lastErr = e;
-      if(attempt<maxAttempts) await new Promise(r=>setTimeout(r, attempt*400));
+      if(attempt<maxAttempts) await new Promise(r=>setTimeout(r, retryDelay(attempt, e.status===429)));
     }
   }
   throw lastErr;
@@ -295,15 +302,14 @@ async function saveState(state){
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify(state)
       });
-      if(!res.ok) throw new Error('save failed: '+res.status);
+      if(!res.ok) throw Object.assign(new Error('save failed: '+res.status), {status:res.status});
       return true; // 成功
     }catch(e){
       if(attempt===maxAttempts){
-        showToast('保存に失敗しました。通信状態を確認してください。');
+        showToast(e.status===429?'アクセスが集中しています。しばらくして自動的に再送します。':'保存に失敗しました。通信状態を確認してください。');
         return false;
       } else {
-        // 瞬間的な不通の可能性があるので、少し待ってすぐに再試行する
-        await new Promise(r=>setTimeout(r, attempt*400));
+        await new Promise(r=>setTimeout(r, retryDelay(attempt, e.status===429)));
       }
     }
   }
@@ -390,9 +396,21 @@ function triggerDownload(text, filename){
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
 
+// 共有ストレージのアクセス回数上限に達しにくいよう、
+// ・間隔を6秒→18秒に延長
+// ・端末ごとにランダムなズレを持たせて、一斉アクセスの山ができないようにする
+// ・画面を見ていない（バックグラウンドの）間は同期を止める
 function startPolling(){
   if(pollTimer) return;
-  pollTimer = setInterval(pollUpdates, 6000);
+  const jitter = Math.floor(Math.random()*5000);
+  pollTimer = setInterval(()=>{
+    if(document.hidden) return;
+    pollUpdates();
+  }, 18000 + jitter);
+
+  document.addEventListener('visibilitychange', ()=>{
+    if(!document.hidden) pollUpdates();
+  });
 }
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
