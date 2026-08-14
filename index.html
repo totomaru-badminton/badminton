@@ -508,9 +508,59 @@ function facedCount(s, idA, idB){
   return count;
 }
 
+// 直前の試合（pending/active含む最後のN試合）でパートナーだったペアのセットを返す
+// 「直前」= 自分が最後に割り当てられた試合のパートナー
+function lastPartnerMap(s){
+  // 各参加者の「最後に割り当てられた試合番号」を元に、その試合でのパートナーを記録
+  const map = {}; // id -> Set of partnerIds（直前試合のパートナー）
+  for(const m of s.matches){
+    const pairs = [m.pair1, m.pair2];
+    for(const pair of pairs){
+      const [a, b] = pair;
+      if(!map[a]) map[a] = new Set();
+      if(!map[b]) map[b] = new Set();
+      // 上書きしながら最後の試合のパートナーを保持
+    }
+  }
+  // 試合を順番に処理して最後のパートナーだけ残す
+  const last = {}; // id -> Set of partnerIds（最後の試合のみ）
+  for(const m of s.matches){
+    for(const pair of [m.pair1, m.pair2]){
+      const [a, b] = pair;
+      last[a] = last[a] || new Set();
+      last[b] = last[b] || new Set();
+      last[a].add(b);
+      last[b].add(a);
+    }
+  }
+  // lastScheduledMatchNo が同じ試合のパートナーのみを残す
+  const result = {};
+  for(const p of Object.values(s.participants)){
+    result[p.id] = new Set();
+  }
+  for(const m of s.matches){
+    for(const pair of [m.pair1, m.pair2]){
+      const [a, b] = pair;
+      const pa = s.participants[a], pb = s.participants[b];
+      if(!pa || !pb) continue;
+      // この試合が両者の最終試合なら「直前パートナー」として記録
+      if(pa.lastScheduledMatchNo === m.no){
+        if(!result[a]) result[a] = new Set();
+        result[a].add(b);
+      }
+      if(pb.lastScheduledMatchNo === m.no){
+        if(!result[b]) result[b] = new Set();
+        result[b].add(a);
+      }
+    }
+  }
+  return result;
+}
+
 // 4人の全組み合わせパターン3通りを試し、
-// 「パートナー被り＋対戦相手被り」が最小のペア割りを返す
+// 「直前パートナー被り（最重視）＋パートナー被り＋対戦相手被り」が最小のペア割りを返す
 function bestSplit(s, four){
+  const lastPartners = lastPartnerMap(s);
   const splits = [
     [[four[0],four[1]],[four[2],four[3]]],
     [[four[0],four[2]],[four[1],four[3]]],
@@ -518,17 +568,21 @@ function bestSplit(s, four){
   ];
   let best = null, bestScore = Infinity;
   for(const [p1,p2] of splits){
-    // パートナー被り（同チーム回数）
+    // 直前試合でパートナーだったか（最重視：大きなペナルティを与える）
+    const lastPenalty =
+      ((lastPartners[p1[0].id]||new Set()).has(p1[1].id) ? 1000 : 0) +
+      ((lastPartners[p2[0].id]||new Set()).has(p2[1].id) ? 1000 : 0);
+    // パートナー被り（通算）
     const partnerScore =
       (s.partnerCounts[pairKey(p1[0].id,p1[1].id)]||0) +
       (s.partnerCounts[pairKey(p2[0].id,p2[1].id)]||0);
-    // 対戦相手被り（異チームで同じ試合に出た回数の合計）
+    // 対戦相手被り
     const oppScore =
       facedCount(s, p1[0].id, p2[0].id) +
       facedCount(s, p1[0].id, p2[1].id) +
       facedCount(s, p1[1].id, p2[0].id) +
       facedCount(s, p1[1].id, p2[1].id);
-    const score = partnerScore * 2 + oppScore; // パートナー被りをやや重視
+    const score = lastPenalty + partnerScore * 2 + oppScore;
     if(score < bestScore){ bestScore = score; best = [p1, p2]; }
   }
   return best;
