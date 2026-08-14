@@ -556,14 +556,17 @@ function runnableMatchNos(){
 }
 
 // 試合履歴から「対戦回数テーブル」と「直前パートナーマップ」をまとめて構築
-function buildMatchStats(s){
+function buildMatchStats(s, includePlanned=false){
   const faced = {};   // faced[a][b] = 同じ試合に出た回数
   const lastPartner = {};  // lastPartner[id] = 最後に組んだパートナーid
   const lastMatchNo = {};  // 各人の最後の試合no
 
   for(const m of s.matches){
-    if(m.status !== 'done') continue;
-    const all = [...m.pair1, ...m.pair2];
+    // 実績集計は終了試合だけ。先の試合を作るときだけ、予定・実施中も
+    // 「これから組む予定」として公平性の計算に加える。
+    if(!includePlanned && m.status !== 'done') continue;
+    const all = [...(m.pair1||[]), ...(m.pair2||[])];
+    if(all.length!==4) continue;
     for(let i=0;i<all.length;i++){
       for(let j=i+1;j<all.length;j++){
         const a=all[i], b=all[j];
@@ -573,7 +576,8 @@ function buildMatchStats(s){
         faced[b][a]=(faced[b][a]||0)+1;
       }
     }
-    for(const pair of [m.pair1, m.pair2]){
+    for(const pair of [m.pair1||[], m.pair2||[]]){
+      if(pair.length!==2) continue;
       const [a,b]=pair;
       if(!(a in lastMatchNo)||m.no>=lastMatchNo[a]){ lastPartner[a]=b; lastMatchNo[a]=m.no; }
       if(!(b in lastMatchNo)||m.no>=lastMatchNo[b]){ lastPartner[b]=a; lastMatchNo[b]=m.no; }
@@ -649,7 +653,7 @@ function generateNextMatch(){
 
     const four = chooseBestFour(s, available, {includePendingLoad:false});
     if(!four) return {error:'次の試合を作れる4人が見つかりません。'};
-    return makeMatchFromFour(s, four);
+    return makeMatchFromFour(s, four, false);
   }
 
   // コートがすべて埋まっている、または実施可能な試合がすでに揃っている場合は、
@@ -658,7 +662,7 @@ function generateNextMatch(){
   const futurePool = allActive;
   const four = chooseBestFour(s, futurePool, {includePendingLoad:true, avoidDuplicatePending:true});
   if(!four) return {error:'先の試合を作れる4人が見つかりません。'};
-  return makeMatchFromFour(s, four);
+  return makeMatchFromFour(s, four, true);
 }
 
 // 予定試合を実際に開始するときの再評価。
@@ -689,19 +693,61 @@ function prepareMatchForStart(m){
   return {match:m, changed:true};
 }
 
+function splitScore(stats, partnerCounts, four){
+  const { faced, lastPartner } = stats;
+  const splits=[
+    [[four[0],four[1]],[four[2],four[3]]],
+    [[four[0],four[2]],[four[1],four[3]]],
+    [[four[0],four[3]],[four[1],four[2]]]
+  ];
+  let bestScore=Infinity;
+  for(const [p1,p2] of splits){
+    const a=p1[0].id,b=p1[1].id,c=p2[0].id,d=p2[1].id;
+    const lastPenalty=
+      (lastPartner[a]===b||lastPartner[b]===a?10000:0)+
+      (lastPartner[c]===d||lastPartner[d]===c?10000:0);
+    const partnerScore=
+      (partnerCounts[pairKey(a,b)]||0)*100+
+      (partnerCounts[pairKey(c,d)]||0)*100;
+    const oppScore=
+      ((faced[a]&&faced[a][c])||0)+((faced[a]&&faced[a][d])||0)+
+      ((faced[b]&&faced[b][c])||0)+((faced[b]&&faced[b][d])||0);
+    bestScore=Math.min(bestScore,lastPenalty+partnerScore+oppScore);
+  }
+  return bestScore;
+}
+
+function buildPartnerCountsFromStats(s, includePlanned=false){
+  const counts={};
+  for(const m of s.matches){
+    if(!includePlanned && m.status!=='done') continue;
+    if(includePlanned && m.status==='done') {
+      // 終了試合も含める
+    }
+    for(const pair of [m.pair1||[],m.pair2||[]]){
+      if(pair.length===2){
+        const k=pairKey(pair[0],pair[1]);
+        counts[k]=(counts[k]||0)+1;
+      }
+    }
+  }
+  return counts;
+}
+
 function chooseBestFour(s, pool, options={}){
   if(pool.length<4) return null;
   const includePendingLoad = options.includePendingLoad !== false;
   const avoidDuplicatePending = options.avoidDuplicatePending === true;
-  const stats=buildMatchStats(s);
+  // 実績と予定を分離。実績gamesPlayedは絶対に予定数で水増ししない。
+  const stats=buildMatchStats(s, includePendingLoad);
+  const partnerCounts=buildPartnerCountsFromStats(s, includePendingLoad);
   const sorted=[...pool];
-  sorted.sort((a,b)=>{
-    const pa=(a.gamesPlayed||0)+(includePendingLoad?pendingScheduledCount(s,a.id):0);
-    const pb=(b.gamesPlayed||0)+(includePendingLoad?pendingScheduledCount(s,b.id):0);
-    return pa-pb || (a.gamesPlayed||0)-(b.gamesPlayed||0) ||
-      (a.lastScheduledMatchNo||0)-(b.lastScheduledMatchNo||0) ||
-      a.name.localeCompare(b.name,'ja');
-  });
+  sorted.sort((a,b)=>
+    (a.gamesPlayed||0)-(b.gamesPlayed||0) ||
+    (includePendingLoad?pendingScheduledCount(s,a.id)-pendingScheduledCount(s,b.id):0) ||
+    (a.lastScheduledMatchNo||0)-(b.lastScheduledMatchNo||0) ||
+    a.name.localeCompare(b.name,'ja')
+  );
 
   let best=null,bestScore=Infinity;
   for(let i=0;i<sorted.length;i++){
@@ -717,19 +763,12 @@ function chooseBestFour(s, pool, options={}){
             if(duplicate) continue;
           }
 
-          const loads=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id)*100:0),0);
+          const pendingLoad=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id)*100:0),0);
           const games=four.reduce((sum,p)=>sum+(p.gamesPlayed||0),0);
-          const partnerPenalty = [
-            [four[0],four[1]],[four[2],four[3]]
-          ].reduce((sum,pair)=>sum+(stats.lastPartner[pair[0].id]===pair[1].id?10000:0),0);
-          const faced=(stats.faced[four[0].id]?.[four[1].id]||0)+
-            (stats.faced[four[0].id]?.[four[2].id]||0)+
-            (stats.faced[four[0].id]?.[four[3].id]||0)+
-            (stats.faced[four[1].id]?.[four[2].id]||0)+
-            (stats.faced[four[1].id]?.[four[3].id]||0)+
-            (stats.faced[four[2].id]?.[four[3].id]||0);
           const fairnessSpread=Math.max(...four.map(p=>p.gamesPlayed||0))-Math.min(...four.map(p=>p.gamesPlayed||0));
-          const score=loads+games+fairnessSpread*1000+partnerPenalty+faced;
+          const pairing=splitScore(stats,partnerCounts,four);
+          // 実績試合数を最優先。予定数はその次。同じペア・同じ対戦の繰り返しはさらに強く避ける。
+          const score=games*100000 + fairnessSpread*10000 + pendingLoad + pairing;
           if(score<bestScore){bestScore=score;best=four;}
         }
       }
@@ -738,9 +777,13 @@ function chooseBestFour(s, pool, options={}){
   return best;
 }
 
-function makeMatchFromFour(s, four){
+function makeMatchFromFour(s, four, includePlanned=false){
   const maxNo=s.matches.reduce((mx,m)=>Math.max(mx,m.no||0),0);
-  const split=bestSplit(buildMatchStats(s),s.partnerCounts,four);
+  // 先の予定を作るときは、既に予定されているペアも避ける。
+  // 実施可能な試合を作るときは、実際に終了した試合だけを実績として使う。
+  const stats=buildMatchStats(s, includePlanned);
+  const partnerCounts=buildPartnerCountsFromStats(s, includePlanned);
+  const split=bestSplit(stats,partnerCounts,four);
   const [p1,p2]=split;
   return {no:maxNo+1,pair1:[p1[0].id,p1[1].id],pair2:[p2[0].id,p2[1].id]};
 }
