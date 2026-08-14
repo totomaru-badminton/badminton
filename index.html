@@ -597,8 +597,7 @@ function generateNextMatch(){
   }
 
   // ③ 各コートの4人でベストなペア割りを決定
-  // buildMatchStats は一度だけ呼んで使い回す（パフォーマンス向上）
-  const stats = buildMatchStats(s);
+  // ②で作成した stats をそのまま使い回す
   const maxNo = s.matches.reduce((mx, m)=> Math.max(mx, m.no||0), 0);
   const matches = courtGroups.map((four, i)=>{
     const [p1,p2] = bestSplit(stats, s.partnerCounts, four);
