@@ -251,22 +251,20 @@ function normalizeState(raw){
     }
     if(!Array.isArray(st.session.matches)) st.session.matches = [];
 
-    // 旧版で「先の試合」を何件も自動生成してしまった場合の救済。
-    // 予定中(pending)の試合同士で同じ参加者が重複しているものは、
-    // 今の2面運用（空いたコート分だけ次の試合を予約）では不正な予約なので、
-    // 最も若い試合だけを残し、それ以降の重複予約は取り除く。
-    // 実施中(active)・終了(done)の試合は絶対に変更しない。
-    const keptPendingIds = new Set();
+    // 先の試合を手動で何試合も組めるよう、予定中(pending)の試合は
+    // 参加者が重複していても削除しない。
+    // ただし、まったく同じ4人・同じペアの重複試合だけは整理する。
+    const seenPending = new Set();
     const normalizedMatches = [];
     for(const m of st.session.matches.slice().sort((a,b)=>(a.no||0)-(b.no||0))){
-      if(m.status !== 'pending'){
-        normalizedMatches.push(m);
-        continue;
+      if(m.status === 'pending'){
+        const all = [...(m.pair1||[]), ...(m.pair2||[])];
+        const key = all.length===4
+          ? [pairKey(all[0],all[1]), pairKey(all[2],all[3])].sort().join('|')
+          : '';
+        if(key && seenPending.has(key)) continue;
+        if(key) seenPending.add(key);
       }
-      const ids=[...(m.pair1||[]), ...(m.pair2||[])];
-      const overlaps = ids.some(id=>keptPendingIds.has(id));
-      if(overlaps) continue;
-      ids.forEach(id=>keptPendingIds.add(id));
       normalizedMatches.push(m);
     }
     st.session.matches = normalizedMatches;
@@ -357,7 +355,7 @@ async function createSharedStore(config, initial){
 
 /* ---------- app state ---------- */
 let state = defaultState();
-let activeTab = 'members';
+let activeTab = 'match';
 let lastSavedJSON = '';
 let saveChain = Promise.resolve();
 let saveInFlight = false;
@@ -615,6 +613,18 @@ function bestSplit(stats, partnerCounts, four){
   return best;
 }
 
+function pendingScheduledCount(s, id){
+  return s.matches.filter(m=>m.status==='pending' &&
+    [...(m.pair1||[]), ...(m.pair2||[])].includes(id)
+  ).length;
+}
+
+function pendingGroupKey(m){
+  const all=[...(m.pair1||[]), ...(m.pair2||[])];
+  if(all.length!==4) return '';
+  return [pairKey(all[0],all[1]), pairKey(all[2],all[3])].sort().join('|');
+}
+
 function generateNextMatch(){
   const s = state.session;
   if(!s) return {error:'本日の練習を開始してください。'};
@@ -622,86 +632,117 @@ function generateNextMatch(){
   const allActive = activeParticipants();
   if(allActive.length < 4) return {error:'4人以上の参加者が必要です。'};
 
-  const courts = Math.max(1, state.courtCount||1);
   const freeCourts = courtsFreeCount();
-  if(freeCourts <= 0) return {error:'現在、すべてのコートで試合中です。試合が終了してから次の試合を追加してください。'};
+  const runnable = runnableMatchNos();
 
-  // すでに予定されている試合は「先の試合」として確保済み。
-  // 同じ人を何度も先の試合に入れないよう、新規作成時の候補から除外する。
-  const busy = busyParticipantIds();
-  const reserved = new Set();
-  for(const m of s.matches){
-    if(m.status!=='pending') continue;
-    [...m.pair1,...m.pair2].forEach(id=>reserved.add(id));
+  // 「＋試合を追加」は1つだけ。
+  // 空きコートがあり、まだ実施可能な試合が足りなければ、今すぐ実施できる試合を作る。
+  if(freeCourts > runnable.length){
+    const busy = busyParticipantIds();
+    const reserved = new Set();
+    for(const no of runnable){
+      const m=s.matches.find(x=>x.no===no);
+      if(m) [...(m.pair1||[]), ...(m.pair2||[])].forEach(id=>reserved.add(id));
+    }
+    const available = allActive.filter(p=>!busy.has(p.id) && !reserved.has(p.id));
+    if(available.length < 4) return {error:'次に入れる参加者が4人以上いません。'};
+
+    const four = chooseBestFour(s, available, {includePendingLoad:false});
+    if(!four) return {error:'次の試合を作れる4人が見つかりません。'};
+    return makeMatchFromFour(s, four);
   }
 
-  // 今すぐ実施可能な予定試合を先に数え、空きコートのうち未予約分だけ新規作成する。
-  const runnableCount = runnableMatchNos().length;
-  const slotsToCreate = Math.max(0, freeCourts - runnableCount);
-  if(slotsToCreate<=0){
-    return {error:'空きコート分の試合はすでに用意されています。'};
-  }
+  // コートがすべて埋まっている、または実施可能な試合がすでに揃っている場合は、
+  // 「先の予定」を1試合追加する。予定は仮予約なので、現在実施中の人も
+  // ここでは除外しない。実際に開始するときに、その時点の状況で再評価する。
+  const futurePool = allActive;
+  const four = chooseBestFour(s, futurePool, {includePendingLoad:true, avoidDuplicatePending:true});
+  if(!four) return {error:'先の試合を作れる4人が見つかりません。'};
+  return makeMatchFromFour(s, four);
+}
 
-  // 実施中の人・すでに予定試合に確保されている人は、新しい予定試合には入れない。
-  const available = allActive.filter(p=>!busy.has(p.id) && !reserved.has(p.id));
-  const poolSize = Math.min(
-    Math.floor(available.length / 4) * 4,
-    slotsToCreate * 4
+// 予定試合を実際に開始するときの再評価。
+// 予定時点の4人が全員入れるならその組み合わせを維持し、
+// 1人でも実施中・退出済みなら、その時点で空いている参加者から公平に組み直す。
+function prepareMatchForStart(m){
+  const s=state.session;
+  if(!s || !m || m.status!=='pending') return {match:m, changed:false};
+
+  const busy=busyParticipantIds();
+  const ids=[...(m.pair1||[]), ...(m.pair2||[])];
+  const originalAvailable = ids.length===4 && ids.every(id=>
+    s.participants[id] && s.participants[id].status==='active' && !busy.has(id)
   );
-  if(poolSize < 4) return {error:'次の試合に入れる未予約の参加者が4人以上いません。現在の予定試合または実施中の試合が進むのを待ってください。'};
 
-  // 終了済み実績だけを使い、出場回数の少ない人を優先する。
-  const sorted = [...available].sort((a,b)=>
-    (a.gamesPlayed||0) - (b.gamesPlayed||0) ||
-    (a.lastScheduledMatchNo||0) - (b.lastScheduledMatchNo||0) ||
-    a.name.localeCompare(b.name,'ja')
-  );
-  const pool = sorted.slice(0, poolSize);
+  if(originalAvailable) return {match:m, changed:false};
 
-  const stats = buildMatchStats(s);
-  const remaining = [...pool];
-  const courtGroups = [];
+  const available=activeParticipants().filter(p=>!busy.has(p.id));
+  if(available.length<4) return {error:'現在空いている参加者が4人未満のため、この試合を開始できません。'};
 
-  while(remaining.length >= 4 && courtGroups.length < slotsToCreate){
-    const anchor = remaining[0];
-    const others = remaining.slice(1);
-    let bestThree = null, bestThreeScore = Infinity;
+  // 先行予定はロックしない。実際に開始する瞬間の終了済み試合数を最優先して再選出する。
+  const four=chooseBestFour(s, available, {includePendingLoad:false});
+  if(!four) return {error:'現在の状況で公平な4人を選べません。'};
 
-    for(let i=0;i<others.length;i++){
-      for(let j=i+1;j<others.length;j++){
-        for(let k=j+1;k<others.length;k++){
-          const trio=[others[i],others[j],others[k]];
-          const score=trio.reduce((sum,p)=>
-            sum + ((stats.faced[anchor.id]&&stats.faced[anchor.id][p.id])||0),0);
-          if(score<bestThreeScore){
-            bestThreeScore=score;
-            bestThree=trio;
+  const split=bestSplit(buildMatchStats(s),s.partnerCounts,four);
+  m.pair1=[split[0][0].id,split[0][1].id];
+  m.pair2=[split[1][0].id,split[1][1].id];
+  return {match:m, changed:true};
+}
+
+function chooseBestFour(s, pool, options={}){
+  if(pool.length<4) return null;
+  const includePendingLoad = options.includePendingLoad !== false;
+  const avoidDuplicatePending = options.avoidDuplicatePending === true;
+  const stats=buildMatchStats(s);
+  const sorted=[...pool];
+  sorted.sort((a,b)=>{
+    const pa=(a.gamesPlayed||0)+(includePendingLoad?pendingScheduledCount(s,a.id):0);
+    const pb=(b.gamesPlayed||0)+(includePendingLoad?pendingScheduledCount(s,b.id):0);
+    return pa-pb || (a.gamesPlayed||0)-(b.gamesPlayed||0) ||
+      (a.lastScheduledMatchNo||0)-(b.lastScheduledMatchNo||0) ||
+      a.name.localeCompare(b.name,'ja');
+  });
+
+  let best=null,bestScore=Infinity;
+  for(let i=0;i<sorted.length;i++){
+    for(let j=i+1;j<sorted.length;j++){
+      for(let k=j+1;k<sorted.length;k++){
+        for(let l=k+1;l<sorted.length;l++){
+          const four=[sorted[i],sorted[j],sorted[k],sorted[l]];
+          const ids=four.map(p=>p.id);
+          if(avoidDuplicatePending){
+            const groupKey=ids.slice().sort().join('|');
+            const duplicate=s.matches.some(m=>m.status==='pending' &&
+              [...(m.pair1||[]), ...(m.pair2||[])].slice().sort().join('|')===groupKey);
+            if(duplicate) continue;
           }
+
+          const loads=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id)*100:0),0);
+          const games=four.reduce((sum,p)=>sum+(p.gamesPlayed||0),0);
+          const partnerPenalty = [
+            [four[0],four[1]],[four[2],four[3]]
+          ].reduce((sum,pair)=>sum+(stats.lastPartner[pair[0].id]===pair[1].id?10000:0),0);
+          const faced=(stats.faced[four[0].id]?.[four[1].id]||0)+
+            (stats.faced[four[0].id]?.[four[2].id]||0)+
+            (stats.faced[four[0].id]?.[four[3].id]||0)+
+            (stats.faced[four[1].id]?.[four[2].id]||0)+
+            (stats.faced[four[1].id]?.[four[3].id]||0)+
+            (stats.faced[four[2].id]?.[four[3].id]||0);
+          const fairnessSpread=Math.max(...four.map(p=>p.gamesPlayed||0))-Math.min(...four.map(p=>p.gamesPlayed||0));
+          const score=loads+games+fairnessSpread*1000+partnerPenalty+faced;
+          if(score<bestScore){bestScore=score;best=four;}
         }
       }
     }
-
-    if(!bestThree) break;
-    const four=[anchor,...bestThree];
-    courtGroups.push(four);
-    const usedIds=new Set(four.map(p=>p.id));
-    for(let i=remaining.length-1;i>=0;i--){
-      if(usedIds.has(remaining[i].id)) remaining.splice(i,1);
-    }
   }
+  return best;
+}
 
+function makeMatchFromFour(s, four){
   const maxNo=s.matches.reduce((mx,m)=>Math.max(mx,m.no||0),0);
-  const matches=courtGroups.map((four,i)=>{
-    const split=bestSplit(stats,s.partnerCounts,four);
-    const [p1,p2]=split;
-    return {
-      no:maxNo+1+i,
-      pair1:[p1[0].id,p1[1].id],
-      pair2:[p2[0].id,p2[1].id]
-    };
-  });
-
-  return matches.length===1 ? matches[0] : {multi:matches};
+  const split=bestSplit(buildMatchStats(s),s.partnerCounts,four);
+  const [p1,p2]=split;
+  return {no:maxNo+1,pair1:[p1[0].id,p1[1].id],pair2:[p2[0].id,p2[1].id]};
 }
 
 function commitMatch(m){
@@ -895,7 +936,7 @@ function renderMatchTab(){
   const stats=Object.values(s.participants).sort((a,b)=>a.gamesPlayed-b.gamesPlayed || a.name.localeCompare(b.name,'ja'));
   return `
     <div class="panel" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
-      <div><h2 style="margin-bottom:2px;">試合表</h2><p class="sub" style="margin:0;">現在の参加者：${active.length}人 ／ コート数：${state.courtCount}面 ／ 空きコート：${freeCourts}面</p></div>
+      <div><h2 style="margin-bottom:2px;">試合表</h2><p class="sub" style="margin:0;">現在の参加者：${active.length}人 ／ コート数：${state.courtCount}面 ／ 空きコート：${freeCourts}面</p><p class="sub" style="margin:3px 0 0;">※コートが空いていない時に作った先の試合は仮予定です。実施時に参加状況に応じて必要なら組み直します。</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn primary" id="addMatchBtn" ${canAdd?'':'disabled'}>＋ 試合を追加</button>
         <button class="btn ghost" id="newDayBtn">🆕 新しい日を開始</button>
@@ -903,7 +944,7 @@ function renderMatchTab(){
     </div>
     ${!canAdd?`<div class="panel"><p class="sub" style="margin:0;">試合を追加するには4人以上の参加者が必要です。</p></div>`:''}
     ${runnable.length>0?`<div class="panel" style="background:#FFF8E6;border:1.5px solid var(--gold);"><p class="sub" style="margin:0;color:var(--ink);"><b>▶ 今すぐ実施できる試合：</b>第${runnable.join('試合・第')}試合</p></div>`:''}
-    ${pending.length===0?`<div class="panel"><div class="empty"><div class="icon">🏸</div>まだ試合が作成されていません。<br>上の「＋ 試合を追加」から先の試合表を組みましょう。</div></div>`:
+    ${pending.length===0?`<div class="panel"><div class="empty"><div class="icon">🏸</div>まだ試合が作成されていません。<br>上の「＋ 試合を追加」から試合表を組みましょう。</div></div>`:
       `<div class="panel"><div class="matchList">${pending.map(m=>renderMatchRow(m,s,runnable.includes(m.no))).join('')}</div></div>`}
     ${done.length>0?`<details class="panel"><summary style="cursor:pointer;font-weight:700;color:var(--ink-soft);font-size:13px;">終了した試合（${done.length}件）</summary>
       <div class="matchList" style="margin-top:10px;">${done.slice().reverse().map(m=>renderMatchRow(m,s,false)).join('')}</div>
@@ -1076,14 +1117,9 @@ function bindEvents(){
     addMatchBtn.onclick = async ()=>{
       const result = generateNextMatch();
       if(result.error){ showToast(result.error); return; }
-      if(result.multi){
-        // 複数コート分まとめてコミット
-        result.multi.forEach(m => commitMatch(m));
-        await persist(`${result.multi.length}試合を追加しました`);
-      } else {
-        commitMatch(result);
-        await persist('試合を追加しました');
-      }
+      commitMatch(result);
+      const freeCourts=courtsFreeCount();
+      await persist(freeCourts>0 ? '次に実施できる試合を追加しました' : '先の予定試合を追加しました');
     };
   }
 
@@ -1109,9 +1145,12 @@ function bindEvents(){
         const msg = runnable.length>0 ? `実施中を解除しました。▶ 次に実施できるのは第${runnable.join('試合・第')}試合です。` : '実施中を解除しました';
         await persist(msg);
       } else {
+        if(courtsFreeCount()<=0){ showToast('現在、空いているコートがありません。'); return; }
+        const prepared=prepareMatchForStart(m);
+        if(prepared.error){ showToast(prepared.error); return; }
         m.status='active';
         m.played=false;
-        await persist('実施中にしました');
+        await persist(prepared.changed ? '実施時点の参加状況に合わせて組み直し、実施中にしました' : '実施中にしました');
       }
     };
   });
