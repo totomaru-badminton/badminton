@@ -250,6 +250,27 @@ function normalizeState(raw){
       delete st.session.activeMatches;
     }
     if(!Array.isArray(st.session.matches)) st.session.matches = [];
+
+    // 旧版で「先の試合」を何件も自動生成してしまった場合の救済。
+    // 予定中(pending)の試合同士で同じ参加者が重複しているものは、
+    // 今の2面運用（空いたコート分だけ次の試合を予約）では不正な予約なので、
+    // 最も若い試合だけを残し、それ以降の重複予約は取り除く。
+    // 実施中(active)・終了(done)の試合は絶対に変更しない。
+    const keptPendingIds = new Set();
+    const normalizedMatches = [];
+    for(const m of st.session.matches.slice().sort((a,b)=>(a.no||0)-(b.no||0))){
+      if(m.status !== 'pending'){
+        normalizedMatches.push(m);
+        continue;
+      }
+      const ids=[...(m.pair1||[]), ...(m.pair2||[])];
+      const overlaps = ids.some(id=>keptPendingIds.has(id));
+      if(overlaps) continue;
+      ids.forEach(id=>keptPendingIds.add(id));
+      normalizedMatches.push(m);
+    }
+    st.session.matches = normalizedMatches;
+
     if(!st.session.partnerCounts) st.session.partnerCounts = {};
     const participants = st.session.participants || {};
     // 実績として数えるのは「実施中→試合終了」になった試合だけ。
@@ -507,13 +528,33 @@ function courtsFreeCount(){
 function runnableMatchNos(){
   const s=state.session;
   if(!s) return [];
-  if(courtsFreeCount()<=0) return [];
+  const freeCourts=courtsFreeCount();
+  if(freeCourts<=0) return [];
+
   const busy = busyParticipantIds();
-  return s.matches.filter(m=>{
-    if(m.status!=='pending') return false;
+  const used = new Set(busy);
+  const runnable=[];
+
+  // 空きコート数を超えて「実施可能」を出さない。
+  // 同じ参加者が複数の予定試合に入っている場合も、先の試合を優先する。
+  const pending=[...s.matches]
+    .filter(m=>m.status==='pending')
+    .sort((a,b)=>(a.no||0)-(b.no||0));
+
+  for(const m of pending){
+    if(runnable.length>=freeCourts) break;
     const ids=[...m.pair1,...m.pair2];
-    return ids.every(id=> s.participants[id] && s.participants[id].status==='active' && !busy.has(id));
-  }).map(m=>m.no);
+    const ok=ids.length===4 && ids.every(id=>
+      s.participants[id] &&
+      s.participants[id].status==='active' &&
+      !used.has(id)
+    );
+    if(ok){
+      runnable.push(m.no);
+      ids.forEach(id=>used.add(id));
+    }
+  }
+  return runnable;
 }
 
 // 試合履歴から「対戦回数テーブル」と「直前パートナーマップ」をまとめて構築
@@ -585,18 +626,31 @@ function generateNextMatch(){
   const freeCourts = courtsFreeCount();
   if(freeCourts <= 0) return {error:'現在、すべてのコートで試合中です。試合が終了してから次の試合を追加してください。'};
 
-  // 現在実施中の人は、空いたコートの次の試合候補から除外する。
+  // すでに予定されている試合は「先の試合」として確保済み。
+  // 同じ人を何度も先の試合に入れないよう、新規作成時の候補から除外する。
   const busy = busyParticipantIds();
-  const available = allActive.filter(p=>!busy.has(p.id));
+  const reserved = new Set();
+  for(const m of s.matches){
+    if(m.status!=='pending') continue;
+    [...m.pair1,...m.pair2].forEach(id=>reserved.add(id));
+  }
 
-  // 空きコート数に応じて、今すぐ組める人数だけを対象にする。
+  // 今すぐ実施可能な予定試合を先に数え、空きコートのうち未予約分だけ新規作成する。
+  const runnableCount = runnableMatchNos().length;
+  const slotsToCreate = Math.max(0, freeCourts - runnableCount);
+  if(slotsToCreate<=0){
+    return {error:'空きコート分の試合はすでに用意されています。'};
+  }
+
+  // 実施中の人・すでに予定試合に確保されている人は、新しい予定試合には入れない。
+  const available = allActive.filter(p=>!busy.has(p.id) && !reserved.has(p.id));
   const poolSize = Math.min(
     Math.floor(available.length / 4) * 4,
-    freeCourts * 4
+    slotsToCreate * 4
   );
-  if(poolSize < 4) return {error:'今すぐ試合に入れる参加者が4人以上いません。現在の試合が終了するのを待ってください。'};
+  if(poolSize < 4) return {error:'次の試合に入れる未予約の参加者が4人以上いません。現在の予定試合または実施中の試合が進むのを待ってください。'};
 
-  // 直近の終了済み実績をもとに、出場回数の少ない人を優先する。
+  // 終了済み実績だけを使い、出場回数の少ない人を優先する。
   const sorted = [...available].sort((a,b)=>
     (a.gamesPlayed||0) - (b.gamesPlayed||0) ||
     (a.lastScheduledMatchNo||0) - (b.lastScheduledMatchNo||0) ||
@@ -608,7 +662,7 @@ function generateNextMatch(){
   const remaining = [...pool];
   const courtGroups = [];
 
-  while(remaining.length >= 4){
+  while(remaining.length >= 4 && courtGroups.length < slotsToCreate){
     const anchor = remaining[0];
     const others = remaining.slice(1);
     let bestThree = null, bestThreeScore = Infinity;
