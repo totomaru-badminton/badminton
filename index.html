@@ -293,6 +293,25 @@ function normalizeState(raw){
       if(typeof p.lastScheduledMatchNo !== 'number') p.lastScheduledMatchNo = 0;
       delete p.restStreak;
     });
+
+    // 途中参加者が「0試合だから」と何試合も連続で優先されないようにする。
+    // 表示する実績 gamesPlayed は実際にプレーした回数のまま保持し、
+    // 組み合わせを選ぶ時だけ selectionOffset を加えた「選考上の試合数」を使う。
+    //
+    // 以前のバージョンで既に途中参加した人には selectionOffset が無いため、
+    // lastScheduledMatchNo > 0 の人を途中参加の可能性が高い人として自動移行する。
+    const activeForOffset = Object.values(participants).filter(p=>p.status==='active');
+    const currentAverage = activeForOffset.length
+      ? activeForOffset.reduce((sum,p)=>sum+(actualGames[p.id]||0),0) / activeForOffset.length
+      : 0;
+    Object.values(participants).forEach(p=>{
+      if(typeof p.selectionOffset !== 'number'){
+        const isLikelyLegacyLateJoiner = (p.lastScheduledMatchNo||0) > 0;
+        p.selectionOffset = isLikelyLegacyLateJoiner
+          ? Math.max(0, currentAverage - (p.gamesPlayed||0))
+          : 0;
+      }
+    });
   }
   return st;
 }
@@ -617,6 +636,20 @@ function bestSplit(stats, partnerCounts, four){
   return best;
 }
 
+// 組み合わせ選択用の試合数。
+ // 途中参加者は参加時点の全体平均を selectionOffset として持つため、
+ // 実績が0でも「0試合の人を追いつかせるまで連続優先」にはならない。
+ // 画面に表示する gamesPlayed はあくまで実際にプレーした回数のまま。
+function selectionGames(p){
+  return (p.gamesPlayed||0) + (p.selectionOffset||0);
+}
+
+function currentSelectionAverage(s){
+  const active = Object.values(s.participants||{}).filter(p=>p.status==='active');
+  if(!active.length) return 0;
+  return active.reduce((sum,p)=>sum+selectionGames(p),0) / active.length;
+}
+
 function pendingScheduledCount(s, id){
   return s.matches.filter(m=>m.status==='pending' &&
     [...(m.pair1||[]), ...(m.pair2||[])].includes(id)
@@ -743,7 +776,7 @@ function chooseBestFour(s, pool, options={}){
   const partnerCounts=buildPartnerCountsFromStats(s, includePendingLoad);
   const sorted=[...pool];
   sorted.sort((a,b)=>
-    (a.gamesPlayed||0)-(b.gamesPlayed||0) ||
+    selectionGames(a)-selectionGames(b) ||
     (includePendingLoad?pendingScheduledCount(s,a.id)-pendingScheduledCount(s,b.id):0) ||
     (a.lastScheduledMatchNo||0)-(b.lastScheduledMatchNo||0) ||
     a.name.localeCompare(b.name,'ja')
@@ -764,10 +797,11 @@ function chooseBestFour(s, pool, options={}){
           }
 
           const pendingLoad=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id)*100:0),0);
-          const games=four.reduce((sum,p)=>sum+(p.gamesPlayed||0),0);
-          const fairnessSpread=Math.max(...four.map(p=>p.gamesPlayed||0))-Math.min(...four.map(p=>p.gamesPlayed||0));
+          const games=four.reduce((sum,p)=>sum+selectionGames(p),0);
+          const fairnessSpread=Math.max(...four.map(p=>selectionGames(p)))-Math.min(...four.map(p=>selectionGames(p)));
           const pairing=splitScore(stats,partnerCounts,four);
-          // 実績試合数を最優先。予定数はその次。同じペア・同じ対戦の繰り返しはさらに強く避ける。
+          // 実績試合数をベースにしつつ、途中参加者は selectionOffset を反映した
+          // 「選考上の試合数」で公平性を判断する。予定数はその次。
           const score=games*100000 + fairnessSpread*10000 + pendingLoad + pairing;
           if(score<bestScore){bestScore=score;best=four;}
         }
@@ -1094,7 +1128,7 @@ function bindEvents(){
       const participants = {};
       checked.forEach(id=>{
         const m = state.members.find(mm=>mm.id===id);
-        if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, lastScheduledMatchNo:0};
+        if(m) participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, selectionOffset:0, lastScheduledMatchNo:0};
       });
       state.session = { startedAt: Date.now(), participants, matches:[], partnerCounts:{} };
       activeTab='match';
@@ -1127,7 +1161,17 @@ function bindEvents(){
       const id = label.dataset.id;
       const m = state.members.find(mm=>mm.id===id);
       if(!m) return;
-      state.session.participants[id] = {id, name:m.name, status:'active', gamesPlayed:0, lastScheduledMatchNo: state.session.matches.length};
+      // 途中参加者は、参加した時点の全体平均を「選考上の試合数」として持たせる。
+      // そのため実績表示は0試合のままでも、追いつくまで連続出場することはない。
+      const baseline = currentSelectionAverage(state.session);
+      state.session.participants[id] = {
+        id,
+        name:m.name,
+        status:'active',
+        gamesPlayed:0,
+        selectionOffset:baseline,
+        lastScheduledMatchNo: state.session.matches.length
+      };
       await persist(`${m.name}さんを追加しました`);
     };
   });
@@ -1139,7 +1183,16 @@ function bindEvents(){
       const name = input.value.trim();
       if(!name) return;
       const id = uid();
-      state.session.participants[id] = {id, name, status:'active', gamesPlayed:0, lastScheduledMatchNo: state.session.matches.length};
+      // 飛び入りゲストも途中参加者と同じ扱いにする。
+      const baseline = currentSelectionAverage(state.session);
+      state.session.participants[id] = {
+        id,
+        name,
+        status:'active',
+        gamesPlayed:0,
+        selectionOffset:baseline,
+        lastScheduledMatchNo: state.session.matches.length
+      };
       await persist(`${name}さんを追加しました`);
     };
     document.getElementById('guestName').onkeydown = e=>{ if(e.key==='Enter') addGuestBtn.click(); };
