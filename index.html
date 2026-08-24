@@ -767,17 +767,43 @@ function buildPartnerCountsFromStats(s, includePlanned=false){
   return counts;
 }
 
+// 直近の予定も含めた連戦数を返す。
+// 例：第12・13・14試合すべてに出ていれば、次を作る時点で streak は3。
+function recentMatchStreak(s, id){
+  const matches=[...s.matches].sort((a,b)=>(b.no||0)-(a.no||0));
+  let streak=0;
+  for(const m of matches){
+    if(m.status==='done' || m.status==='pending' || m.status==='active'){
+      const ids=[...(m.pair1||[]), ...(m.pair2||[])];
+      if(ids.includes(id)) streak++;
+      else break;
+    }
+  }
+  return streak;
+}
+
 function chooseBestFour(s, pool, options={}){
   if(pool.length<4) return null;
   const includePendingLoad = options.includePendingLoad !== false;
   const avoidDuplicatePending = options.avoidDuplicatePending === true;
-  // 実績と予定を分離。実績gamesPlayedは絶対に予定数で水増ししない。
   const stats=buildMatchStats(s, includePendingLoad);
   const partnerCounts=buildPartnerCountsFromStats(s, includePendingLoad);
-  const sorted=[...pool];
+
+  // 連戦防止を最優先。
+  // 直前の試合に出た人を全員外しても4人以上残るなら、直前出場者は候補から外す。
+  // これにより人数が十分いる場合、途中参加者を含めて同じ人が試合を作るたびに
+  // 連続で選ばれることを防ぐ。人数が少ない場合は自動的に制限を緩める。
+  const latestNo=s.matches.reduce((mx,m)=>Math.max(mx,m.no||0),0);
+  const latest=s.matches.filter(m=>(m.no||0)===latestNo);
+  const latestIds=new Set(latest.flatMap(m=>[...(m.pair1||[]), ...(m.pair2||[])]));
+  const restedPool=pool.filter(p=>!latestIds.has(p.id));
+  const candidatePool=restedPool.length>=4 ? restedPool : [...pool];
+
+  const sorted=[...candidatePool];
   sorted.sort((a,b)=>
-    selectionGames(a)-selectionGames(b) ||
+    recentMatchStreak(s,a.id)-recentMatchStreak(s,b.id) ||
     (includePendingLoad?pendingScheduledCount(s,a.id)-pendingScheduledCount(s,b.id):0) ||
+    selectionGames(a)-selectionGames(b) ||
     (a.lastScheduledMatchNo||0)-(b.lastScheduledMatchNo||0) ||
     a.name.localeCompare(b.name,'ja')
   );
@@ -796,13 +822,21 @@ function chooseBestFour(s, pool, options={}){
             if(duplicate) continue;
           }
 
-          const pendingLoad=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id)*100:0),0);
+          const pendingLoad=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id):0),0);
           const games=four.reduce((sum,p)=>sum+selectionGames(p),0);
           const fairnessSpread=Math.max(...four.map(p=>selectionGames(p)))-Math.min(...four.map(p=>selectionGames(p)));
+          const streakPenalty=four.reduce((sum,p)=>sum+recentMatchStreak(s,p.id),0);
           const pairing=splitScore(stats,partnerCounts,four);
-          // 実績試合数をベースにしつつ、途中参加者は selectionOffset を反映した
-          // 「選考上の試合数」で公平性を判断する。予定数はその次。
-          const score=games*100000 + fairnessSpread*10000 + pendingLoad + pairing;
+
+          // 予定を先に作る場合は、休憩を最優先。
+          // 途中参加者の「実績0試合」を理由に連続出場させない。
+          // pendingLoad も加えるので、先の予定を何試合作っても同じ人に偏りにくい。
+          const score=
+            streakPenalty*10000000 +
+            pendingLoad*1000000 +
+            games*100000 +
+            fairnessSpread*10000 +
+            pairing;
           if(score<bestScore){bestScore=score;best=four;}
         }
       }
