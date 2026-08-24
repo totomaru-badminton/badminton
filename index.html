@@ -789,62 +789,86 @@ function chooseBestFour(s, pool, options={}){
   const stats=buildMatchStats(s, includePendingLoad);
   const partnerCounts=buildPartnerCountsFromStats(s, includePendingLoad);
 
-  // 連戦防止を最優先。
-  // 直前の試合に出た人を全員外しても4人以上残るなら、直前出場者は候補から外す。
-  // これにより人数が十分いる場合、途中参加者を含めて同じ人が試合を作るたびに
-  // 連続で選ばれることを防ぐ。人数が少ない場合は自動的に制限を緩める。
+  // 直前の試合に出た人を全員休ませられるなら、まずその人たちは候補から外す。
   const latestNo=s.matches.reduce((mx,m)=>Math.max(mx,m.no||0),0);
   const latest=s.matches.filter(m=>(m.no||0)===latestNo);
   const latestIds=new Set(latest.flatMap(m=>[...(m.pair1||[]), ...(m.pair2||[])]));
   const restedPool=pool.filter(p=>!latestIds.has(p.id));
   const candidatePool=restedPool.length>=4 ? restedPool : [...pool];
 
-  const sorted=[...candidatePool];
-  sorted.sort((a,b)=>
-    recentMatchStreak(s,a.id)-recentMatchStreak(s,b.id) ||
-    (includePendingLoad?pendingScheduledCount(s,a.id)-pendingScheduledCount(s,b.id):0) ||
-    selectionGames(a)-selectionGames(b) ||
-    (a.lastScheduledMatchNo||0)-(b.lastScheduledMatchNo||0) ||
-    a.name.localeCompare(b.name,'ja')
-  );
-
-  let best=null,bestScore=Infinity;
-  for(let i=0;i<sorted.length;i++){
-    for(let j=i+1;j<sorted.length;j++){
-      for(let k=j+1;k<sorted.length;k++){
-        for(let l=k+1;l<sorted.length;l++){
-          const four=[sorted[i],sorted[j],sorted[k],sorted[l]];
-          const ids=four.map(p=>p.id);
-          if(avoidDuplicatePending){
-            const groupKey=ids.slice().sort().join('|');
-            const duplicate=s.matches.some(m=>m.status==='pending' &&
-              [...(m.pair1||[]), ...(m.pair2||[])].slice().sort().join('|')===groupKey);
-            if(duplicate) continue;
-          }
-
-          const pendingLoad=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id):0),0);
-          const games=four.reduce((sum,p)=>sum+selectionGames(p),0);
-          const fairnessSpread=Math.max(...four.map(p=>selectionGames(p)))-Math.min(...four.map(p=>selectionGames(p)));
-          const streakPenalty=four.reduce((sum,p)=>sum+recentMatchStreak(s,p.id),0);
-          const pairing=splitScore(stats,partnerCounts,four);
-
-          // 予定を先に作る場合は、休憩を最優先。
-          // 途中参加者の「実績0試合」を理由に連続出場させない。
-          // pendingLoad も加えるので、先の予定を何試合作っても同じ人に偏りにくい。
-          const score=
-            streakPenalty*10000000 +
-            pendingLoad*1000000 +
-            games*100000 +
-            fairnessSpread*10000 +
-            pairing;
-          if(score<bestScore){bestScore=score;best=four;}
-        }
+  // 「誰と一緒の4人だったか」「誰と同じ試合に出たか」を数える。
+  // これを4人選びの段階から評価することで、途中参加者が複数いても
+  // その2人だけが毎回セットで選ばれるのを防ぐ。
+  const together={};
+  const groupCounts={};
+  const recentGroups=[];
+  for(const m of s.matches){
+    if(!includePendingLoad && m.status!=='done') continue;
+    const ids=[...(m.pair1||[]), ...(m.pair2||[])];
+    if(ids.length!==4) continue;
+    const g=ids.slice().sort().join('|');
+    groupCounts[g]=(groupCounts[g]||0)+1;
+    recentGroups.push({no:m.no||0, ids:new Set(ids)});
+    for(let i=0;i<ids.length;i++){
+      for(let j=i+1;j<ids.length;j++){
+        const k=pairKey(ids[i],ids[j]);
+        together[k]=(together[k]||0)+1;
       }
     }
   }
+  recentGroups.sort((a,b)=>b.no-a.no);
+
+  let best=null,bestScore=Infinity;
+  const n=candidatePool.length;
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++) for(let k=j+1;k<n;k++) for(let l=k+1;l<n;l++){
+    const four=[candidatePool[i],candidatePool[j],candidatePool[k],candidatePool[l]];
+    const ids=four.map(p=>p.id);
+    const sortedIds=ids.slice().sort();
+    const groupKey=sortedIds.join('|');
+
+    if(avoidDuplicatePending){
+      const duplicate=s.matches.some(m=>m.status==='pending' &&
+        [...(m.pair1||[]), ...(m.pair2||[])].slice().sort().join('|')===groupKey);
+      if(duplicate) continue;
+    }
+
+    const pendingLoad=four.reduce((sum,p)=>sum+(includePendingLoad?pendingScheduledCount(s,p.id):0),0);
+    const selectionTotal=four.reduce((sum,p)=>sum+selectionGames(p),0);
+    const fairnessSpread=Math.max(...four.map(p=>selectionGames(p)))-Math.min(...four.map(p=>selectionGames(p)));
+    const streak=four.reduce((sum,p)=>sum+recentMatchStreak(s,p.id),0);
+
+    // 同じ4人組・同じ人同士の同試合を強く避ける。
+    // 特に「途中参加した2人がずっと一緒」を防ぐため、4人中の6組すべての
+    // 共起回数を評価し、直近の試合で一緒だった人ほど大きく不利にする。
+    let togetherPenalty=0;
+    for(let a=0;a<ids.length;a++) for(let b=a+1;b<ids.length;b++){
+      togetherPenalty += (together[pairKey(ids[a],ids[b])]||0) * 20000;
+      const recentIndex=recentGroups.findIndex(g=>g.ids.has(ids[a]) && g.ids.has(ids[b]));
+      if(recentIndex===0) togetherPenalty += 500000;
+      else if(recentIndex===1) togetherPenalty += 150000;
+      else if(recentIndex===2) togetherPenalty += 50000;
+    }
+    const exactGroupPenalty=(groupCounts[groupKey]||0)*5000000;
+
+    // 4人を選ぶ時点でも「その4人ならどんなペアになるか」を評価する。
+    // これにより、同じパートナーの固定化を4人選択段階から抑える。
+    const pairing=splitScore(stats,partnerCounts,four);
+
+    // 優先順位：休憩 > 予定の偏り > 同じ4人/同じ組み合わせの繰り返し > 試合数。
+    // 途中参加者の0試合を埋めるために、同じ人たちを何度も集めることはしない。
+    const score=
+      streak*1000000000 +
+      pendingLoad*100000000 +
+      exactGroupPenalty +
+      togetherPenalty +
+      pairing*1000 +
+      selectionTotal*100000 +
+      fairnessSpread*50000;
+
+    if(score<bestScore){bestScore=score;best=four;}
+  }
   return best;
 }
-
 function makeMatchFromFour(s, four, includePlanned=false){
   const maxNo=s.matches.reduce((mx,m)=>Math.max(mx,m.no||0),0);
   // 先の予定を作るときは、既に予定されているペアも避ける。
